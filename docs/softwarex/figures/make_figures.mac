@@ -58,12 +58,17 @@ P : [[[0,0,0], [0,1,0], [0,2,0]], [[1,0,0], [1,1,1], [1,2,0]], [[2,0,0], [2,1,0]
 S : nurbs_bezier_surface(P, [[1,1,1], [1,w,1], [1,1,1]])$
 K0 : factor(ratsimp(subst([s = 1/2, t = 1/2], nurbs_curvature_sym(S, 2, 2, s, t)[1])))$
 print("apex curvature:", kmid, "   centre K:", K0)$
+/* columns: closed forms (kapex, Kcentre), the same quantities evaluated
+   numerically on float copies of the objects (kapex_num, Kcentre_num:
+   independent check of the closed forms), and arc length / area          */
 block([f: openw(sconcat(figdir, "weight_study.csv"))],
-  printf(f, "w,kapex,length,Kcentre,area~%"),
+  printf(f, "w,kapex,kapex_num,length,Kcentre,Kcentre_num,area~%"),
   for wv in [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8] do
-    printf(f, "~f,~f,~f,~f,~f~%", wv, float(subst(w = wv, kmid)),
-      nurbs_curve_length(nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, float(wv), 1])),
-      float(subst(w = wv, K0)),
-      nurbs_surface_area(nurbs_bezier_surface(P, [[1,1,1], [1,float(wv),1], [1,1,1]]))),
+    block([Qn: nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, float(wv), 1]),
+           Sn: nurbs_bezier_surface(P, [[1,1,1], [1,float(wv),1], [1,1,1]])],
+      printf(f, "~f,~f,~f,~f,~f,~f,~f~%", wv, float(subst(w = wv, kmid)),
+        nurbs_curve_curvature(Qn, 0.5), nurbs_curve_length(Qn),
+        float(subst(w = wv, K0)), nurbs_gaussian_curvature(Sn, 0.5, 0.5),
+        nurbs_surface_area(Sn))),
   close(f))$
 print("make_figures.mac: done")$
