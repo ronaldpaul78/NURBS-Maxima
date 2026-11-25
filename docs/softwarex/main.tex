@@ -60,7 +60,7 @@
 
 \begin{frontmatter}
 
-\title{\pkg: exact, symbolic and arbitrary-precision NURBS curves, surfaces and differential geometry in the Maxima computer algebra system}
+\title{\pkg: exact and arbitrary-precision NURBS modelling and differential geometry in Maxima}
 
 %% ---- Authors ---------------------------------------------------------------
 \author[unp]{Ronald Paul Santamaria Silupu\,\orcidlink{0009-0007-2226-4815}\corref{cor1}}
@@ -78,11 +78,11 @@
   city={Piura}, country={Peru}}
 
 \begin{abstract}
-\pkg{} is an open-source package for the free computer algebra system Maxima that implements the standard algorithms for non-uniform rational B-spline (NURBS) curves and surfaces together with their differential geometry. A single code base runs in exact rational and radical arithmetic, with symbolic weights, in double precision and in arbitrary-precision floating point; the type of the input selects the arithmetic. The package covers evaluation, rational derivatives, knot insertion and refinement, degree elevation, Bézier decomposition, interpolation, point inversion, fundamental forms, Gaussian, mean and principal curvatures, singular points, area, volume and total curvature, with export to VTK, STL, OBJ, CSV and NURBS-Python JSON. It is validated by 95 regression tests and a cross-validation with NURBS-Python that agrees to $2.3\times10^{-13}$.
+Free NURBS libraries compute in double precision only, so they cannot prove geometric identities, return curvature as a closed-form function of a design parameter, or evaluate reliably near singular points. \pkg{} brings the standard NURBS algorithms for curves and surfaces, together with fundamental forms and Gaussian, mean and principal curvatures, to the free computer algebra system Maxima. One code base runs in exact, symbolic, double and arbitrary-precision arithmetic, selected by the type of the input. The package passes 95 regression tests and agrees with NURBS-Python to $2.3\times10^{-13}$ in points, derivatives and normals. Examples show curvature at a singular pole with at least 24 correct digits and design sensitivities in closed form.
 \end{abstract}
 
 \begin{keyword}
-NURBS \sep B-splines \sep computer algebra \sep Maxima \sep differential geometry \sep arbitrary precision
+NURBS \sep computer algebra \sep Maxima \sep differential geometry \sep arbitrary precision
 \end{keyword}
 
 \end{frontmatter}
@@ -98,13 +98,13 @@ NURBS \sep B-splines \sep computer algebra \sep Maxima \sep differential geometr
 Nr. & Code metadata description & Metadata \\
 \midrule
 C1 & Current code version & v2.0.0 \\
-C2 & Permanent link to code/repository used for this code version & \url{https://github.com/ronaldpaul78/NURBS-Maxima} \\
-C3 & Permanent link to Reproducible Capsule & \url{https://doi.org/10.5281/zenodo.24523238} \\
+C2 & Permanent link to code/repository used for this code version & \url{https://github.com/ronaldpaul78/NURBS-Maxima/tree/v2.0.0} \\
+C3 & Permanent link to Reproducible Capsule & Zenodo archive of v2.0.0: \url{https://doi.org/10.5281/zenodo.24523238} \\
 C4 & Legal Code License & MIT \\
 C5 & Code versioning system used & git \\
-C6 & Software code languages, tools, and services used & Maxima language; gnuplot (graphics); Python~3 with NURBS-Python (geomdl) only for cross-validation \\
-C7 & Compilation requirements, operating environments \& dependencies & Maxima $\geq$ 5.40 (tested with 5.46.0 on GCL); gnuplot; any OS supported by Maxima/wxMaxima (Windows, Linux, macOS). No compilation needed. \\
-C8 & If available Link to developer documentation/manual & \url{https://github.com/ronaldpaul78/NURBS-Maxima/blob/main/docs/API.md} \\
+C6 & Software code languages, tools, and services used & Maxima; gnuplot; Python~3 with NURBS-Python (geomdl) for cross-validation only \\
+C7 & Compilation requirements, operating environments \& dependencies & Maxima $\geq$ 5.40 (tested with 5.46.0, GCL build) and gnuplot, both included in wxMaxima; Windows, Linux or macOS; no compilation \\
+C8 & If available Link to developer documentation/manual & \url{https://github.com/ronaldpaul78/NURBS-Maxima/blob/v2.0.0/docs/API.md} \\
 C9 & Support email for questions & rsantamarias@egresados.unp.edu.pe \\
 \bottomrule
 \end{tabularx}
@@ -116,40 +116,34 @@ C9 & Support email for questions & rsantamarias@egresados.unp.edu.pe \\
 \section{Motivation and significance}
 \label{sec:motivation}
 
-Non-uniform rational B-splines (NURBS) combine the local control of B-splines with the exact representation of conics and quadrics through rational weights~\cite{PieglTiller1987,Piegl1991,Farin1992,PieglTiller1997,Farin1999,Farin2002,Salomon2006,CorderoCortes2002}, and they remain an active research topic, from developable patches bounded by NURBS curves~\cite{FernandezJambrina2020} and generalised NURBS for surface approximation~\cite{Taheri2022} to rational subdivision schemes with extraordinary points~\cite{Cashman2009}. They are the geometric basis of computer-aided design (CAD) exchange and of isogeometric analysis~\cite{Hughes2005,Cottrell2009}. Mature open implementations, such as NURBS-Python (geomdl)~\cite{Bingol2019}, the differentiable module NURBS-Diff~\cite{Prasad2022}, the NURBS routines on which the isogeometric toolbox GeoPDEs builds~\cite{deFalco2011}, and the CAD kernels, are numerical libraries, as are related Python tools for the geometry of curves and surfaces~\cite{Johansson2015,Pereira2024}: every operation is carried out in double precision and quantities such as curvature are sampled pointwise.
+Non-uniform rational B-splines (NURBS) represent free-form shapes and, through rational weights, conics and quadrics exactly~\cite{PieglTiller1987,Piegl1991,Farin1992,PieglTiller1997,Farin1999,Farin2002,Salomon2006,CorderoCortes2002}. They underlie CAD data exchange and isogeometric analysis~\cite{Hughes2005,Cottrell2009} and remain an active research topic~\cite{FernandezJambrina2020,Taheri2022,Cashman2009}. Open implementations such as NURBS-Python (geomdl)~\cite{Bingol2019}, NURBS-Diff~\cite{Prasad2022} and the NURBS routines behind GeoPDEs~\cite{deFalco2011}, like other Python tools for curves and surfaces~\cite{Johansson2015,Pereira2024}, are numerical: they work in double precision and sample quantities such as curvature pointwise.
 
-Three recurring research and teaching tasks need more than that:
-\begin{enumerate}
-\item \emph{Symbolic verification.} Proving that a rational quadratic curve is a circle, that knot refinement leaves a surface unchanged, or that a patch has a prescribed curvature requires exact arithmetic, not agreement to machine precision.
-\item \emph{Closed-form design sensitivities.} A designer who varies a weight $w$ wants curvature or area as a function of $w$, not a table of samples. This requires the NURBS algorithms to run on symbolic data.
-\item \emph{Ill-conditioned evaluation.} At degenerate points, such as the poles of a surface of revolution, the formulas for the Gaussian and mean curvatures divide two quantities that vanish together. Double precision loses every significant digit there; arbitrary precision does not.
-\end{enumerate}
+Three tasks need more: (i) \emph{symbolic verification}, e.g.\ proving that a rational quadratic is a circle or that knot refinement leaves a surface unchanged; (ii) \emph{closed-form sensitivities}, e.g.\ curvature as a function of a weight $w$ rather than a table of samples; and (iii) \emph{ill-conditioned evaluation}, e.g.\ curvature near the poles of a surface of revolution, where both numerator and denominator of the curvature formulas vanish and double precision loses all digits.
 
-This work builds on our previous Python developments in geometric design: surfaces constructed from planar curves~\cite{Urbina2025LACCEI}, Coons surfaces expressed as B-spline surfaces~\cite{Castillo2025Coons}, NURBS surfaces generated from controlled NURBS curves~\cite{Urbina2025ICCSA}, spheres and tori of revolution as NURBS surfaces~\cite{Castillo2026ARTIIS}, swept surfaces from NURBS curves~\cite{Santamaria2026LACCEI}, and a rational parametric hypersurface in $\mathbb{R}^4$ studied with symbolic visualisation~\cite{Vilcamiche2025Viviani} (cf.\ Python environments for 4D visualisation~\cite{Jing2012}). Those implementations work in floating point; the step taken here is to move the same constructions into a computer algebra system, where they can also be carried out exactly and symbolically.
+A computer algebra system is the natural place for these tasks. Differential geometry of curves and surfaces has long been computed in proprietary systems such as Mathematica~\cite{Cordero1995}. The free system Maxima\footnote{\url{https://maxima.sourceforge.io}; version 5.46.0 was used here.}, widely used in teaching through its interface wxMaxima\footnote{\url{https://wxmaxima-developers.github.io/wxmaxima/}}~\cite{Karjanto2021}, has no NURBS support: its 5.46.0 distribution offers Bernstein polynomials (\code{bernstein}) and interpolating cubic splines (\code{interpol}) only. Teaching and interactive modelling tools for curves and surfaces exist~\cite{Miller2010,Peixoto2024}, but they are numerical.
 
-Computer algebra systems are the natural environment for these tasks. The differential geometry of curves and surfaces has long been taught and computed in proprietary systems such as Mathematica~\cite{Cordero1995}, whereas the free system Maxima\footnote{\url{https://maxima.sourceforge.io}; version 5.46.0 was used in this work.} has no NURBS support: its 5.46.0 distribution offers Bernstein polynomials (\code{bernstein}) and interpolating cubic splines (\code{interpol}), but no B-spline or NURBS package. Maxima, a descendant of Macsyma, is widely used in teaching through its notebook interface wxMaxima\footnote{\url{https://wxmaxima-developers.github.io/wxmaxima/}}, for instance in calculus courses~\cite{Karjanto2021}. Dedicated tools for teaching or interactively modelling curves and surfaces exist~\cite{Miller2010,Peixoto2024}, but they are numerical and do not expose the algorithms to symbolic manipulation.
+\pkg{} extends our earlier floating-point work in Python on surfaces built from planar curves~\cite{Urbina2025LACCEI}, Coons and B-spline surfaces~\cite{Castillo2025Coons}, NURBS surfaces from controlled curves~\cite{Urbina2025ICCSA}, spheres and tori of revolution~\cite{Castillo2026ARTIIS}, swept surfaces~\cite{Santamaria2026LACCEI} and a rational hypersurface in $\mathbb{R}^4$~\cite{Vilcamiche2025Viviani,Jing2012} into Maxima, where the same constructions can also be carried out exactly and symbolically.
 
-\pkg{} fills this gap. It implements the algorithms of Piegl and Tiller~\cite{PieglTiller1997} in pure Maxima for curves and surfaces, adds a differential-geometry layer for NURBS surfaces, and exports to the usual visualisation and exchange formats. Table~\ref{tab:comparison} compares it with geomdl, a widely used free NURBS library and the one we use for cross-validation. The combination \pkg{} offers (a free licence, NURBS objects that accept exact and symbolic data, and built-in differential geometry of rational surfaces) is, to our knowledge, not available in the tools cited above. geomdl remains the reference for floating-point speed and file formats, and we use it as an independent oracle in the validation.
+Table~\ref{tab:comparison} compares \pkg{} with geomdl, a widely used free NURBS library and our cross-validation oracle. The comparison is limited to built-in functionality of the released versions; features a user could program on top of either library are not counted, and performance is discussed separately (Section~\ref{sec:examples}).
 
 \begin{table}[t]
 \centering
 \small
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.9cm}>{\raggedright\arraybackslash}p{4.3cm}@{}}
 \toprule
- & \pkg{} 2.0.0 & geomdl 5.5.1~\cite{Bingol2019} \\
+Built-in capability & \pkg{} 2.0.0 & geomdl 5.5.1~\cite{Bingol2019} \\
 \midrule
 Licence & MIT (host Maxima: GPL) & MIT \\
 Rational curves and surfaces & yes & yes \\
-Arithmetic & exact rational/radical, symbolic, double, bigfloat & double (knot vectors rounded to a fixed number of decimals) \\
-Closed-form curvature as a function of a weight & yes & no \\
+Arithmetic of the algorithms & exact rational/radical, symbolic, double, bigfloat & double (knot vectors rounded to a fixed number of decimals) \\
+Curvature as a closed-form function of a weight & yes & no \\
 Knot insertion, refinement, degree elevation & yes & yes \\
 Bézier decomposition / point inversion & yes / yes & yes / no \\
 Gaussian, mean and principal curvatures, $\iint K\,dA$ & yes & no \\
 Export formats & VTK (with $K$, $H$ fields), STL, OBJ, CSV, JSON & VTK, STL, OBJ, OFF, JSON, YAML, CFG, CSV, TXT, SMESH, VMESH, 3DM \\
-Language of the algorithms & Maxima & Python \\
 \bottomrule
 \end{tabularx}
-\caption{Feature comparison with NURBS-Python (geomdl). The geomdl column was checked against the source code of version 5.5.1 (modules \code{operations}, \code{exchange} and \code{exchange\_vtk}), the version used in the cross-validation of Section~\ref{sec:examples}.}
+\caption{Built-in capabilities of \pkg{} and NURBS-Python (geomdl). ``yes'' means that a public function provides the capability; the geomdl column was checked against the source code of version 5.5.1 (modules \code{operations}, \code{exchange}, \code{exchange\_vtk}), the version used in the cross-validation.}
 \label{tab:comparison}
 \end{table}
 
@@ -157,12 +151,12 @@ Language of the algorithms & Maxima & Python \\
 \section{Software description}
 \label{sec:description}
 
-\pkg{} is a single Maxima source file (\code{nurbs\_maxima.mac}, about 1\,350 lines and 110 public functions) loaded with \code{load("nurbs\_maxima.mac")}. It has no dependencies beyond Maxima and gnuplot, both distributed with wxMaxima. The repository contains the package, seven worked examples, a test directory, an API reference, benchmarks and a Spanish-language teaching notebook that walks through the source.
+\pkg{} is one Maxima file (\code{nurbs\_maxima.mac}, about 1\,350 lines, 110 public functions) loaded with \code{load}. Curves and surfaces are Maxima structures (\code{nurbscrv}, \code{nurbssrf}) with indices from 0 as in~\cite{PieglTiller1997}; constructors validate knot vectors and, when numeric, the positivity of the weights. The repository adds seven examples, the test suite, an API reference (\code{docs/API.md}) and a Spanish teaching notebook.
 
 \subsection{Software architecture}
 \label{sec:architecture}
 
-Curves and surfaces are Maxima structures, \code{nurbscrv(degree, knots, ctrlpts, weights)} and \code{nurbssrf(degree\_u, degree\_v, knots\_u, knots\_v, ctrlpts, weights)}, with indices starting at 0 as in~\cite{PieglTiller1997}. Constructors validate knot vectors (length, monotonicity, multiplicity) and weights (positive when numeric; symbolic weights are accepted). The code is organised in five layers plus a validation suite (Fig.~\ref{fig:architecture}).
+The code has five layers (Fig.~\ref{fig:architecture}), implementing the algorithms of~\cite{PieglTiller1997} for curves and surfaces, a differential-geometry layer and output. Three design decisions shape it.
 
 \begin{figure}[t]
 \centering
@@ -187,160 +181,150 @@ Curves and surfaces are Maxima structures, \code{nurbscrv(degree, knots, ctrlpts
 \node[draw, rounded corners=2pt, font=\scriptsize, align=center, fill=gray!10,
       below=2.5mm of core, text width=9.4cm] (arith) {Arithmetic chosen by the input: exact rational/radical $\;\cdot\;$ symbolic $\;\cdot\;$ double (\code{nurbs\_float}) $\;\cdot\;$ bigfloat (\code{nurbs\_bfloat}, \code{fpprec}); one tolerance \code{nurbs\_tol}};
 \end{tikzpicture}
-\caption{Architecture of \pkg. Each layer only calls the layers below it; the validation suite exercises all of them.}
+\caption{Architecture of \pkg{} and main functions of each layer (full list in \code{docs/API.md}). Each layer only calls the layers below it; the validation suite exercises all of them.}
 \label{fig:architecture}
 \end{figure}
 
-Three design decisions shape the package.
+\emph{One code base, four arithmetics.} No routine forces a numerical conversion: exact input gives exact output, floats give floats, and bigfloats give results at precision \code{fpprec}. No algorithm branches on the sign or size of a weight, so symbolic weights pass through all of them. \code{nurbs\_float} and \code{nurbs\_bfloat} convert whole objects before dense sampling.
 
-\emph{One code base, four arithmetics.} No routine forces a numerical conversion: exact input gives exact output, floating-point input gives floating-point output, and bigfloat input gives results at the precision \code{fpprec}. Because none of the algorithms branches on the sign or size of a weight, symbolic weights flow through all of them; the constructor checks positivity only when a weight is a number. \code{nurbs\_float} and \code{nurbs\_bfloat} convert whole objects before dense sampling.
+\emph{One tolerance.} Every zero test uses one predicate: a float is zero when $|x|\le\mathtt{nurbs\_tol}$ (default $10^{-10}$), an exact or symbolic expression when \code{radcan} or \code{ratsimp} reduces it to 0. Singular and umbilic tests use relative forms of the same tolerance, e.g.\ $|S_u\times S_v|\le \mathtt{nurbs\_tol}\,\max(1,|S_u||S_v|)$.
 
-\emph{A single tolerance.} All zero tests go through one predicate that always returns \code{true} or \code{false}: a floating-point value is zero when $|x|\le$\,\code{nurbs\_tol} (default $10^{-10}$), an exact constant when \code{radcan} reduces it to 0, and a symbolic expression when \code{ratsimp} does. Singular, umbilic and planar points use relative versions of the same tolerance, for instance $|S_u\times S_v|\le \mathtt{nurbs\_tol}\cdot\max(1,|S_u||S_v|)$; the umbilic test uses $H^2-K$ rather than $\kappa_1-\kappa_2$ to avoid amplifying round-off through a square root.
-
-\emph{A shared differential-geometry helper.} \code{nurbs\_surface\_geometry(S,u,v)} performs one second-order derivative evaluation (A4.4) and returns the point, the tangents, the unit normal $\mathbf n = S_u\times S_v/|S_u\times S_v|$, the coefficients of the fundamental forms, and
+\emph{One differential-geometry helper.} \code{nurbs\_surface\_geometry(S,u,v)} makes one second-order derivative evaluation and returns the point, tangents, unit normal $\mathbf n = S_u\times S_v/|S_u\times S_v|$, fundamental forms and~\cite{doCarmo1976}
 \begin{equation}
-K=\frac{LN-M^2}{EG-F^2},\qquad H=\frac{EN-2FM+GL}{2(EG-F^2)},\qquad \kappa_{1,2}=H\pm\sqrt{H^2-K},
+K=\frac{LN-M^2}{EG-F^2},\qquad H=\frac{EN-2FM+GL}{2(EG-F^2)},\qquad \kappa_{1,2}=H\pm\sqrt{H^2-K}.
 \label{eq:KH}
 \end{equation}
-following~\cite{doCarmo1976}. Every curvature function, the VTK exporter and the integrand of $\iint K\,dA$ are thin wrappers around it, so all of them agree on what is singular. The symbolic variant \code{nurbs\_curvature\_sym} works on the exact rational expression of one patch and uses the unnormalised normal, which keeps $K$ rational in the parameters and the weights.
+All curvature functions, the VTK exporter and the integrand of $\iint K\,dA$ call it, so they agree on what is singular. \code{nurbs\_curvature\_sym} computes $[K,H]$ on the exact expression of a patch with the unnormalised normal, keeping $K$ rational in the parameters and weights.
 
 \subsection{Software functionalities}
 \label{sec:functionalities}
 
-\begin{itemize}
-\item \emph{B-spline core:} span search, non-zero basis functions and their derivatives (A2.1--A2.3), exact piecewise polynomials of the basis, Bernstein polynomials, clamped and uniform knot vectors, uniform, chord-length and centripetal parametrisations.
-\item \emph{Curves:} evaluation and rational derivatives of any order (A4.1, A4.2), exact span expressions, weights (also symbolic), affine and projective transformations through $4\times4$ homogeneous matrices, knot insertion and refinement, degree elevation, Bézier decomposition, splitting, reversal, global interpolation with an LU solver valid in exact, double and bigfloat arithmetic, and Newton point projection; curvature, torsion, Frenet frame and arc length by Gauss--Legendre quadrature.
-\item \emph{Surfaces:} evaluation and partial derivatives (A4.3, A4.4), normals, isocurves, grids and triangle meshes; knot insertion, refinement, degree elevation and Bézier decomposition along $u$ or $v$; point projection; primitives (Bézier, bilinear, extrusion, ruled, revolution, torus, sphere, cylinder).
-\item \emph{Differential geometry:} fundamental forms, $K$, $H$, principal curvatures and directions, point classification (elliptic, hyperbolic, parabolic, planar, umbilic, singular), search for singular points, area, enclosed volume, total curvature $\iint K\,dA$ for Gauss--Bonnet checks, and exact $[K,H]$ on a patch.
-\item \emph{Output:} inline plots in wxMaxima, composable objects of Maxima's \code{draw} package, images (PNG, SVG, PDF, EPS), OBJ with normals, ASCII STL, legacy VTK with \code{gaussian\_curvature}, \code{mean\_curvature} and normal fields for ParaView~\cite{Ahrens2005}, CSV, and JSON in the schema of geomdl with 17 significant digits.
-\item \emph{Performance aid:} \code{nurbs\_compile()} translates the span-search and basis kernels to compiled Lisp; results remain exact for exact input.
-\end{itemize}
-
-\subsection{Sample code snippets analysis}
-\label{sec:snippets}
-
-The following session proves symbolically that the quadratic NURBS circle satisfies $x^2+y^2=1$ on a whole span, evaluates the curvature of an exact torus and exports it for ParaView:
+Fig.~\ref{fig:architecture} lists the main functions per layer: B-spline bases and their derivatives; evaluation and derivatives of rational curves and surfaces; knot insertion and refinement, degree elevation, Bézier decomposition, interpolation and point inversion; fundamental forms, curvatures, point classification, singular points, area, volume and total curvature; plots in wxMaxima and export to VTK, STL, OBJ, CSV and geomdl JSON. The following session proves that the NURBS circle satisfies $x^2+y^2=1$ on a whole span, evaluates the curvature of an exact torus and exports it for ParaView~\cite{Ahrens2005}:
 
 \begin{lstlisting}
 load("nurbs_maxima.mac")$
 C : nurbs_circle(1)$
-X : nurbs_curve_span_expr(C, 2, t)$     /* exact rational expression of span 2 */
-ratsimp(X . X), algebraic;              /* 1 : the identity holds for every t  */
+X : nurbs_curve_span_expr(C, 2, t)$   /* exact rational expression of span 2 */
+ratsimp(X . X), algebraic;            /* 1 for every t */
 T : nurbs_torus(2, 1/2)$
-nurbs_gaussian_curvature(nurbs_float(T), 0.1, 0.0);   /* 0.8 = 1/(r(R+r))   */
-nurbs_export_vtk(T, "torus.vtk", 36, 18)$             /* K, H, normals     */
-\end{lstlisting}
-
-Leaving a weight as a symbol turns every algorithm into a closed-form computation:
-
-\begin{lstlisting}
-assume(w > 0)$
-Q : nurbs_bezier_curve([[-1,0],[0,1],[1,0]], [1, w, 1])$
-ratsimp(nurbs_curve_curvature(Q, 1/2));      /* w : apex curvature equals w */
+nurbs_gaussian_curvature(nurbs_float(T), 0.1, 0.0);   /* 0.8 = 1/(r(R+r)) */
+nurbs_export_vtk(T, "torus.vtk", 36, 18)$             /* K, H and normals */
 \end{lstlisting}
 
 %% ===========================================================================
 \section{Illustrative examples}
 \label{sec:examples}
 
-All numbers below are printed by the scripts named in each paragraph, run with Maxima 5.46.0 (GCL) on an Intel Xeon processor at 2.30\,GHz; the figures are generated by \code{docs/softwarex/figures/make\_figures.mac}. Fig.~\ref{fig:surfaces} shows two of the objects.
+The numbers below are printed by the scripts named in each paragraph (Maxima 5.46.0, GCL build, Intel Xeon at 2.30\,GHz); the figures are generated by \code{docs/softwarex/figures/make\_figures.mac}, and \code{docs/softwarex/README.md} lists the command that reproduces each result.
 
 \begin{figure}[t]
 \centering
 \includegraphics[height=4.6cm, trim=58 60 65 50, clip]{figures/torus.pdf}\hspace{1.5cm}
 \includegraphics[height=4.6cm, trim=79 26 79 14, clip]{figures/vase.pdf}
-\caption{Left: exact NURBS torus ($R=2$, $r=1/2$, degrees $2\times2$, $9\times9$ control net, shown). Right: surface of revolution interpolating eight measured profile points (Example 3). Both are drawn with \code{nurbs\_draw\_surface} and Maxima's \code{draw} package.}
+\caption{Left: exact NURBS torus ($R=2$, $r=1/2$, degrees $2\times2$) with its $9\times9$ control net. Right: surface of revolution interpolating eight measured profile points (Example~3). Both drawn with \code{nurbs\_draw\_surface}.}
 \label{fig:surfaces}
 \end{figure}
 
-\paragraph{Validation} The regression suite \code{tests/rtest\_nurbs.mac} (Maxima's standard \code{rtest} format) contains 95 problems: textbook values (Example~2.3 of~\cite{PieglTiller1997}), symbolic identities (the circle satisfies $x^2+y^2=1$ on all four spans; Bézier bases equal Bernstein polynomials; $K=-1/(1+x^2+y^2)^2$ for $z=xy$), invariance under knot insertion, refinement, degree elevation, weight scaling and projective maps, Gauss--Bonnet on the sphere, torus and an ellipsoid, and symbolic-weight, bigfloat and export checks. All 95 pass in about 32\,s. Independently, \code{tests/crossval\_export.mac} exports 16 curves and surfaces to JSON, and \code{tests/crossval\_geomdl.py} re-evaluates them with geomdl~5.5.1. The maximum absolute difference over points, first and second derivatives and normals is $2.3\times10^{-13}$ (a second derivative of a refined rational curve); for points alone it is $8.9\times10^{-16}$. Knot insertion, refinement, degree elevation (compared in Bézier form) and Bézier decomposition give identical knot vectors and control points that agree to $1.8\times10^{-15}$. Table~\ref{tab:accuracy} lists representative accuracy checks.
+\paragraph{Validation} The package is checked at four levels; each is one command.
+\begin{enumerate}
+\item \emph{Exact and symbolic identities}, which hold with zero error: the circle satisfies $x^2+y^2=1$ on all four spans; Bézier bases equal Bernstein polynomials; knot insertion, refinement and degree elevation leave a curve unchanged; $K=-1/(1+x^2+y^2)^2$ for $z=xy$.
+\item \emph{Analytical reference values} in floating point: curvature and length of a circle, curvature, area and volume of a torus, Gauss--Bonnet on sphere and torus, projective invariance (Table~\ref{tab:accuracy}).
+\item \emph{Regression suite}: levels 1 and 2 plus textbook values (Example~2.3 of~\cite{PieglTiller1997}), bigfloat, symbolic-weight and export checks form 95 problems in Maxima's \code{rtest} format (\code{tests/run\_tests.mac}); all pass in about 32\,s.
+\item \emph{Independent cross-validation}: 16 curves and surfaces are exported to JSON and re-evaluated with geomdl~5.5.1 (\code{tests/crossval\_geomdl.py}). The largest difference over points, first and second derivatives and normals is $2.3\times10^{-13}$ (points alone: $8.9\times10^{-16}$); knot insertion, refinement, degree elevation and Bézier decomposition give identical knot vectors and control points within $1.8\times10^{-15}$.
+\end{enumerate}
 
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{@{}lc@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}Xr@{}}
 \toprule
-Check (\code{tests/accuracy\_table.mac}) & Max.\ abs.\ error \\
+Analytical check (\code{tests/accuracy\_table.mac}) & Max.\ abs.\ error \\
 \midrule
-Circle $x^2+y^2=1$, symbolic, 4 spans & 0 (exact) \\
-Curve unchanged by insertion, refinement, elevation (exact) & 0 \\
 Circle $r=3$: curvature $1/3$ (14 points) / length $6\pi$ & $1.7\times10^{-16}$ / $3.6\times10^{-15}$ \\
 Projective invariance, rational cubic (11 points) & $8.9\times10^{-16}$ \\
 Torus $K$ against the analytic value ($8\times10$ grid) & $1.8\times10^{-15}$ \\
 Torus area $4\pi^2Rr$ / volume $2\pi^2Rr^2$ & $1.4\times10^{-12}$ / $4.5\times10^{-13}$ \\
 Sphere $\iint K\,dA=4\pi$ / torus $\iint K\,dA=0$ & $3.7\times10^{-12}$ / $6.4\times10^{-16}$ \\
 \bottomrule
-\end{tabular}
-\caption{Representative accuracy (double precision unless stated).}
+\end{tabularx}
+\caption{Level-2 validation: errors with respect to analytical values.}
 \label{tab:accuracy}
 \end{table}
 
-\paragraph{Example 1: curvature at the singular poles of a NURBS sphere} (\code{examples/04\_torus.mac}). The rational sphere of revolution has singular points ($S_u\times S_v=0$) at its poles; \code{nurbs\_singular\_points} finds 18 singular grid nodes, all at $z=\pm1$. Near a pole both $EG-F^2$ and $LN-M^2$ in Eq.~\eqref{eq:KH} tend to zero, and their quotient suffers catastrophic cancellation. Fig.~\ref{fig:numerics}a shows $|K-1|$ on the unit sphere at parameter distance $\varepsilon$ from the pole. In double precision the error grows erratically; at $\varepsilon=10^{-9}$ the computed curvature is $-36.9$ instead of $1$. The same code, given a bigfloat copy of the sphere with \code{fpprec:50}, keeps the error below $1.5\times10^{-25}$ for every $\varepsilon\ge10^{-14}$, that is, at least 24 correct digits. Away from singular points the double results are reliable: the computed $K$ of the torus matches the analytic value to $1.8\times10^{-15}$ (Table~\ref{tab:accuracy}), and the ellipsoid with semi-axes $3,2,1$, obtained exactly by scaling the sphere, satisfies Gauss--Bonnet with an error of $-3.0\times10^{-6}$ ($4\times4$ quadrature cells per span), even though its curvature varies from $0.028$ to $2.25$.
+\paragraph{Example 1: curvature at the singular poles of a sphere} The script \code{examples/04\_torus.mac} treats closed surfaces: a torus, the unit sphere and an ellipsoid; the $\varepsilon$ sweep of Fig.~\ref{fig:numerics}a is computed by \code{make\_figures.mac}. The rational sphere of revolution is singular ($S_u\times S_v=0$) at its poles; \code{nurbs\_singular\_points} finds 18 singular grid nodes, all at $z=\pm1$. Near a pole both $EG-F^2$ and $LN-M^2$ in Eq.~\eqref{eq:KH} tend to zero. In double precision the error of $K$ grows erratically as the parameter distance $\varepsilon$ to the pole decreases, and at $\varepsilon=10^{-9}$ the computed curvature is $-36.9$ instead of~1. The same code on a 50-digit bigfloat copy of the sphere keeps the error below $1.5\times10^{-25}$ for all $\varepsilon\ge10^{-14}$, i.e.\ at least 24 correct digits. Away from the poles double precision suffices: the ellipsoid with semi-axes $3,2,1$, obtained exactly by scaling the sphere, satisfies Gauss--Bonnet ($\iint K\,dA=4\pi$) with an error of $-3.0\times10^{-6}$, although its curvature varies from $0.028$ to $2.25$.
 
-\paragraph{Example 2: a design weight as a symbol} (\code{examples/06\_symbolic\_weight\_study.mac}). For the quadratic rational Bézier curve with control points $(-1,0),(0,1),(1,0)$ and weights $1,w,1$, \pkg{} returns the rational parametrisation; eliminating $t$ gives a conic with discriminant $64(w-1)w^2(w+1)$, so the curve is an ellipse for $w<1$, a parabola for $w=1$ and a hyperbola for $w>1$, the classical result of~\cite[Ch.~7]{PieglTiller1997}, here derived rather than quoted. The curvature at the apex is exactly $\kappa(1/2)=w$, and for $w=1/\sqrt2$ the package proves that $x^2+(y+1)^2-2\equiv0$. For a biquadratic Bézier patch over $[0,2]^2$ whose centre control point is raised to height~1 with weight $w$, \code{nurbs\_curvature\_sym} gives the height of the centre $w/(w+3)$, the Gaussian curvature there $K=w^2/4$ and the mean curvature $H=-w\sqrt{(w+3)^6}/\bigl(2(w+3)^3\bigr)=-w/2$, and Maxima confirms that $dK/dw>0$ for all $w>0$. The symbolic $K$ at $w=3$ coincides with the numerical evaluation of the corresponding patch (difference $0.0$). Fig.~\ref{fig:weight} plots the closed forms together with quantities that have no elementary closed form and are computed numerically (arc length and area).
+\paragraph{Example 2: a design weight as a symbol} (\code{examples/06\_symbolic\_weight\_study.mac}). For the rational quadratic Bézier curve with control points $(-1,0),(0,1),(1,0)$ and weights $1,w,1$, eliminating the parameter gives a conic with discriminant $64(w-1)w^2(w+1)$: an ellipse for $w<1$, a parabola for $w=1$ and a hyperbola for $w>1$~\cite[Ch.~7]{PieglTiller1997}. The apex curvature is exactly $\kappa(1/2)=w$, and for $w=1/\sqrt2$ the package proves $x^2+(y+1)^2-2\equiv0$. For a biquadratic Bézier patch over $[0,2]^2$ whose centre control point has height~1 and weight $w$, \code{nurbs\_curvature\_sym} gives at the centre the height $w/(w+3)$, the Gaussian curvature $K=w^2/4$ and the mean curvature $H=-w/2$ (Maxima returns $H=-w\sqrt{P(w)}\,/\,\bigl(2(w+3)^3\bigr)$ with $P(w)=(w+3)^6$, which \code{radcan} reduces to $-w/2$ for $w>0$). Hence $dK/dw=w/2>0$: the weight sharpens the bump monotonically. Fig.~\ref{fig:weight} checks both closed forms against numerical evaluation of float copies of the objects; they agree to $3.6\times10^{-15}$.
 
-\paragraph{Example 3: from measured profile to ParaView and 3D printing} (\code{examples/07\_scientific\_workflow.mac}). Eight measured points of a vase profile are interpolated by a cubic (centripetal parameters, LU solve, residual $4.4\times10^{-16}$) and revolved into an exact rational surface of degrees $2\times3$ with a $9\times8$ control net (Fig.~\ref{fig:surfaces}, right). On a $48\times40$ grid the shared helper gives $K\in[-3.672,\,1.018]$ and $H\in[-1.027,\,-0.135]$; 53.7\,\% of the points are elliptic and 46.3\,\% hyperbolic, and $K$ changes sign at the inflection of the profile (Fig.~\ref{fig:numerics}b). The lateral area is $21.2322$ and $\iint K\,dA=1.1192965$. Because the surface is an annulus ($\chi=0$), the Gauss--Bonnet theorem with boundary reduces, for a surface of revolution, to $\iint K\,dA=2\pi\,(r'(s_0)-r'(s_1))$, where $r'$ is the radial slope of the profile per unit arc length at the bottom and top. Evaluating the right-hand side from the profile gives $1.1192980$, a relative agreement of $1.4\times10^{-6}$ that validates the curvature field without any external library. Refining the surface in $v$ leaves it unchanged to $1.1\times10^{-16}$. The script ends by writing the surface to VTK (with $K$, $H$ and normals for ParaView), STL for 3D printing, OBJ and geomdl JSON.
+\paragraph{Example 3: from measured profile to ParaView and 3D printing} (\code{examples/07\_scientific\_workflow.mac}). Eight measured points of a vase profile are interpolated by a cubic (residual $4.4\times10^{-16}$) and revolved into an exact rational surface of degrees $2\times3$ (Fig.~\ref{fig:surfaces}). On a $48\times40$ grid, 53.7\,\% of the points are elliptic and 46.3\,\% hyperbolic, with $K\in[-3.672,\,1.018]$; $K$ changes sign at the inflection of the profile (Fig.~\ref{fig:numerics}b). The total curvature is $\iint K\,dA=1.1192965$. For a surface of revolution with two boundary circles, Gauss--Bonnet gives $\iint K\,dA=2\pi\,(r'(s_0)-r'(s_1))$, where $r'$ is the radial slope of the profile per unit arc length at the bottom and the top; evaluating this from the profile gives $1.1192980$, a relative agreement of $1.4\times10^{-6}$ that validates the curvature field without an external library. The script exports the surface to VTK with $K$ and $H$ fields, STL, OBJ and geomdl JSON.
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}
-\begin{groupplot}[group style={group size=2 by 1, horizontal sep=2.2cm},
-  width=0.43\linewidth, height=5.2cm, tick label style={font=\scriptsize},
-  label style={font=\small}, legend style={font=\scriptsize}]
+\begin{groupplot}[group style={group size=2 by 1, horizontal sep=1.9cm},
+  width=0.47\linewidth, height=6.2cm,
+  tick label style={font=\footnotesize}, label style={font=\footnotesize},
+  title style={font=\footnotesize}, legend style={font=\footnotesize},
+  grid=major, grid style={gray!25}]
 \nextgroupplot[xmode=log, ymode=log, x dir=reverse,
-  xlabel={distance to the pole $\varepsilon$}, ylabel={$|K-1|$},
-  ymin=1e-52, ymax=1e3, legend style={font=\scriptsize, at={(0.5,-0.32)}, anchor=north}, legend cell align=left,
-  title={\small (a) unit sphere near a pole}]
-\addplot[mark=*, mark size=1.4pt, red!75!black] table[x=eps, y=errdouble, col sep=comma] {figures/pole_sweep.csv};
+  xlabel={parameter distance to the pole $\varepsilon$}, ylabel={error $|K-1|$},
+  ymin=1e-55, ymax=1e5, ytick={1e-50,1e-40,1e-30,1e-20,1e-10,1e0},
+  xtick={1e-1,1e-5,1e-9,1e-13},
+  legend style={at={(0.5,-0.3)}, anchor=north, legend columns=2},
+  title={(a) unit sphere near a pole}]
+\addplot[thick, mark=*, mark size=2pt, red!75!black] table[x=eps, y=errdouble, col sep=comma] {figures/pole_sweep.csv};
 \addlegendentry{double}
-\addplot[mark=square*, mark size=1.4pt, blue!70!black] table[x=eps, y=errbfloat, col sep=comma] {figures/pole_sweep.csv};
-\addlegendentry{bigfloat, 50 digits}
-\nextgroupplot[xlabel={height $z$}, ylabel={$K$}, axis y line*=left,
-  ymin=-4, ymax=1.5, title={\small (b) vase, along a meridian}]
-\addplot[thick, blue!70!black] table[x=z, y=K, col sep=comma] {figures/vase_meridian.csv};
-\addplot[dashed, gray, domain=0:3.5] {0};
+\addplot[thick, mark=square*, mark size=2pt, blue!70!black] table[x=eps, y=errbfloat, col sep=comma] {figures/pole_sweep.csv};
+\addlegendentry{bigfloat (50 digits)}
+\nextgroupplot[xlabel={height $z$ along a meridian}, ylabel={Gaussian curvature $K$},
+  ymin=-4, ymax=1.5, xmin=0, xmax=3.5,
+  legend style={at={(0.5,-0.3)}, anchor=north, legend columns=2},
+  title={(b) vase of Example 3}]
+\fill[red!8] (axis cs:0,0) rectangle (axis cs:2.007,1.5);
+\fill[blue!8] (axis cs:2.007,-4) rectangle (axis cs:3.5,0);
+\addplot[very thick, black] table[x=z, y=K, col sep=comma] {figures/vase_meridian.csv};
+\addlegendentry{$K(z)$}
+\addplot[dashed, gray, forget plot] coordinates {(2.007,-4) (2.007,1.5)};
 \end{groupplot}
-\begin{axis}[at={(group c2r1.south west)}, width=0.43\linewidth, height=5.2cm,
-  axis x line=none, axis y line*=right, ymin=0, ymax=1.4,
-  ylabel={profile radius $x$}, tick label style={font=\scriptsize},
-  label style={font=\small}, xmin=0, xmax=3.5]
-\addplot[thick, orange!80!black, densely dotted] table[x=z, y=x, col sep=comma] {figures/vase_meridian.csv};
-\end{axis}
 \end{tikzpicture}
-\caption{(a) Error of the Gaussian curvature of the unit NURBS sphere at parameter distance $\varepsilon$ from a singular pole, same code in double and in 50-digit arithmetic (\code{figures/pole\_sweep.csv}). (b) Gaussian curvature (solid, left axis) and profile radius (dotted, right axis) along a meridian of the vase of Example~3; $K$ changes sign at the inflection of the profile (\code{figures/vase\_meridian.csv}).}
+\caption{(a) Error of the Gaussian curvature of the unit NURBS sphere at parameter distance $\varepsilon$ from a singular pole, computed by the same code in double and in 50-digit arithmetic. (b) Gaussian curvature along a meridian of the vase. It changes sign at $z\approx2.01$ (dashed line), the inflection of the profile: points below are elliptic ($K>0$, red band) and points above hyperbolic ($K<0$, blue band). Data: \code{figures/pole\_sweep.csv}, \code{figures/vase\_meridian.csv}.}
 \label{fig:numerics}
 \end{figure}
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}
-\begin{groupplot}[group style={group size=2 by 1, horizontal sep=1.8cm},
-  width=0.45\linewidth, height=5cm, xlabel={weight $w$}, xmode=log,
-  log basis x=2, tick label style={font=\scriptsize}, label style={font=\small},
-  legend style={font=\scriptsize, at={(0.5,-0.32)}, anchor=north}, legend cell align=left]
-\nextgroupplot[ylabel={curve}, title={\small (a) rational quadratic arc}]
-\addplot[thick, blue!70!black, domain=0.25:8, samples=60] {x};
-\addlegendentry{$\kappa(1/2)=w$ (closed form)}
-\addplot[only marks, mark=*, mark size=1.4pt, orange!80!black] table[x=w, y=length, col sep=comma] {figures/weight_study.csv};
-\addlegendentry{arc length (numerical)}
-\nextgroupplot[ylabel={patch}, ymode=log, title={\small (b) weighted biquadratic patch}]
-\addplot[thick, blue!70!black, domain=0.25:8, samples=60] {x^2/4};
-\addlegendentry{$K(\tfrac12,\tfrac12)=w^2/4$ (closed form)}
-\addplot[only marks, mark=*, mark size=1.4pt, orange!80!black] table[x=w, y=area, col sep=comma] {figures/weight_study.csv};
-\addlegendentry{area (numerical)}
+\begin{groupplot}[group style={group size=2 by 1, horizontal sep=1.9cm},
+  width=0.47\linewidth, height=6cm, xlabel={weight $w$}, xmode=log, log basis x=2,
+  xtick={0.25,0.5,1,2,4,8}, xticklabels={$\frac14$,$\frac12$,1,2,4,8},
+  tick label style={font=\footnotesize}, label style={font=\footnotesize},
+  title style={font=\footnotesize}, legend style={font=\footnotesize, at={(0.5,-0.3)}, anchor=north},
+  legend cell align=left, grid=major, grid style={gray!25}]
+\nextgroupplot[ylabel={apex curvature $\kappa(1/2)$}, ymode=log, log basis y=2,
+  ytick={0.25,0.5,1,2,4,8}, yticklabels={$\frac14$,$\frac12$,1,2,4,8},
+  title={(a) rational quadratic arc}]
+\addplot[thick, blue!70!black, domain=0.25:8, samples=80] {x};
+\addlegendentry{closed form $\kappa=w$}
+\addplot[only marks, mark=o, mark size=3pt, thick, orange!85!black] table[x=w, y=kapex_num, col sep=comma] {figures/weight_study.csv};
+\addlegendentry{numerical evaluation}
+\nextgroupplot[ylabel={centre curvature $K(\frac12,\frac12)$}, ymode=log,
+  title={(b) weighted biquadratic patch}]
+\addplot[thick, blue!70!black, domain=0.25:8, samples=80] {x^2/4};
+\addlegendentry{closed form $K=w^2/4$}
+\addplot[only marks, mark=o, mark size=3pt, thick, orange!85!black] table[x=w, y=Kcentre_num, col sep=comma] {figures/weight_study.csv};
+\addlegendentry{numerical evaluation}
 \end{groupplot}
 \end{tikzpicture}
-\caption{Parametric study of a weight $w$ (Example~2). Lines: closed forms returned by \pkg; the numerical values of $\kappa$ and $K$ in \code{figures/weight\_study.csv} lie on them to all printed digits. Markers: arc length and area, which have no elementary closed form.}
+\caption{Example 2: closed forms returned by \pkg{} (lines) and the same quantities evaluated numerically on float copies of the objects for ten values of $w$ (circles); the largest difference is $3.6\times10^{-15}$. Data: \code{figures/weight\_study.csv}.}
 \label{fig:weight}
 \end{figure}
 
-\paragraph{Performance} Table~\ref{tab:bench} compares mean times per call with geomdl (\code{tests/benchmark.mac}, \code{tests/benchmark\_geomdl.py}). Converting objects to floating point is the decisive optimisation: exact evaluation of the torus keeps $\sqrt2$ symbolic and makes the curvature computation about 33 times slower. In double precision \pkg{} is 26--62 times slower than geomdl in this run (36--50 times in an earlier run on the same machine, which indicates the run-to-run variability); \code{nurbs\_compile()} reduces the gap only partially (1.3--2.1 times), since much of the cost lies in Maxima's generic list arithmetic and simplification. Bigfloat (32 digits) costs 6--8 times double, which is affordable for the few evaluations where precision matters.
+\paragraph{Performance} Table~\ref{tab:bench} reports the mean time per call for the same objects and parameter sets (40 curve parameters, 20 surface parameter pairs) in \pkg{} and in geomdl~5.5.1 under CPython, measured in one process on one machine by repeating the calls for at least 1\,s (\code{tests/benchmark.mac}, \code{tests/benchmark\_geomdl.py}). These figures describe this configuration only and are not a general ranking: absolute times depend on the processor and on the Lisp used to build Maxima. In double precision \pkg{} was 26--62 times slower than geomdl (36--50 times in an earlier run on the same machine); \code{nurbs\_compile()} speeds it up 1.3--2.1 times. Exact evaluation of the torus keeps $\sqrt2$ symbolic and makes the curvature 33 times slower than in double precision, and 32-digit bigfloats cost 6--8 times double. The package is therefore meant for exact and symbolic analysis, high-precision reference values, verification, teaching and moderate meshes ($10^3$--$10^4$ points), not for large-scale meshing.
 
 \begin{table}[t]
 \centering
 \small
 \resizebox{\linewidth}{!}{\input{bench_table.tex}}
-\caption{Mean time per call in ms (each measurement loops for at least 1\,s). Maxima 5.46.0 (GCL), geomdl 5.5.1 on CPython 3.13; Intel Xeon @ 2.30\,GHz. geomdl has no surface-curvature routine. Absolute times depend on the machine and on the Lisp used to build Maxima (GCL here); the ratios are what matter.}
+\caption{Mean time per call in ms (Maxima 5.46.0 with GCL; geomdl 5.5.1 on CPython 3.13; Intel Xeon @ 2.30\,GHz). geomdl has no surface-curvature routine.}
 \label{tab:bench}
 \end{table}
 
@@ -348,21 +332,19 @@ Sphere $\iint K\,dA=4\pi$ / torus $\iint K\,dA=0$ & $3.7\times10^{-12}$ / $6.4\t
 \section{Impact}
 \label{sec:impact}
 
-\pkg{} opens three kinds of use that, to our knowledge, were not possible with free software before.
+\emph{Observed impact to date.} \pkg{} was released in November 2026 (v2.0.0). So far it has been used only by the authors, in the work reported here; we know of no external users, courses or derived projects yet.
 
-\emph{New research questions.} Because the algorithms accept symbols, sensitivities of curvature, height or other differential quantities with respect to weights, control points or knots can be obtained in closed form and differentiated, as in Example~2. Because they accept bigfloats, reference values can be computed at degenerate points where floating-point libraries return noise (Example~1). Such high-precision values are useful as test oracles for other NURBS and isogeometric codes~\cite{Hughes2005,deFalco2011}.
+\emph{Potential impact on research.} Because the algorithms accept symbols, sensitivities of differential quantities with respect to weights, control points or knots can be obtained in closed form (Example~2); because they accept bigfloats, reference values can be computed at degenerate points where floating-point libraries return noise (Example~1). Such values can serve as test oracles for other NURBS and isogeometric codes~\cite{Hughes2005,deFalco2011}. Exact arithmetic also turns ``agrees to $10^{-15}$'' into ``is identical''. During cross-validation it exposed that geomdl's \code{degree\_operations}, applied to a non-Bézier rational cubic with interior knots, changed the curve by up to $0.336$, while Algorithm A5.9 in \pkg{} leaves it unchanged; since Bézier decomposition and per-segment elevation agree in both libraries (to $1.8\times10^{-15}$), the deviation arises in geomdl's recombination and knot-removal stage.
 
-\emph{Verification of algorithms and libraries.} Exact arithmetic turns ``agrees to $10^{-15}$'' into ``is identical'': the test suite proves that insertion, refinement and degree elevation leave a curve unchanged. During cross-validation, the same approach showed that applying geomdl's degree-elevation operation directly to a non-Bézier rational cubic with interior knots changed the curve by up to $0.336$ over 51 samples, whereas Algorithm A5.9 in \pkg{} leaves it unchanged; after Bézier decomposition both agree to $1.8\times10^{-15}$. In geomdl~5.5.1 the routine follows the same strategy (Bézier decomposition, elevation of each segment, recombination and knot removal); since decomposition and per-segment elevation agree with \pkg{}, the deviation arises in the recombination and knot-removal stage. The practical lesson is that degree elevation of general NURBS should be validated, which exact arithmetic makes straightforward.
+\emph{Potential impact on teaching.} The algorithms are readable Maxima code whose results appear both as formulas and as plots in one wxMaxima notebook, and a Spanish notebook explains the implementation. We propose the package for courses in symbolic computation, numerical analysis, geometric design and differential geometry, e.g.\ deriving B-spline bases by hand and comparing them with \code{bspline\_basis\_piecewise}, finding the weight that makes a conic a circle, or checking Gauss--Bonnet numerically. Free tools such as Python are already used to teach multivariable calculus~\cite{Surbakti2024,Saragih2024}; \pkg{} adds exact answers at no licence cost.
 
-\emph{Teaching.} The algorithms are written in readable Maxima rather than hidden in a compiled kernel, and the results can be displayed both as formulas and as plots in the same wxMaxima notebook. The repository includes a Spanish-language notebook (\code{docs/programacion\_nurbs.wxm}) that explains how the package is programmed. The package has just been released and has no external users yet; we propose it as course material for students of symbolic computation, numerical analysis, computer-aided geometric design and differential geometry. Typical exercises are: deriving the basis functions with the Cox--de Boor recursion by hand and comparing them with the exact piecewise polynomials returned by \code{bspline\_basis\_piecewise}; proving that a rational quadratic curve is a conic and finding the weight that makes it a circle; checking that knot insertion and degree elevation do not change a curve, first exactly and then in floating point; and computing Gaussian and mean curvature of a surface and verifying the Gauss--Bonnet theorem numerically. Free tools are increasingly used for these subjects, for instance Python in multivariable calculus~\cite{Surbakti2024,Saragih2024}; Maxima adds exact symbolic answers to the same workflow. Because Maxima and wxMaxima are free and run on Windows, Linux and macOS, such material can be used in universities without licence costs, and the Spanish notebook lowers the entry barrier for Spanish-speaking students.
-
-The package is deliberately not a CAD or meshing kernel. Its intended range is exact and symbolic analysis, high-precision reference computations, verification, teaching, and moderate meshes ($10^3$--$10^4$ points) exported for visualisation or fabrication. \emph{Limitations.} (i) Speed: floating-point evaluation is one to two orders of magnitude slower than a compiled or vectorised library (Table~\ref{tab:bench}), which limits practical meshes to about $10^4$ points. (ii) Expression growth: exact computations with irrational weights such as $\sqrt2/2$ (circles and quadrics) produce large radical expressions; \code{nurbs\_curvature\_sym} on such patches can exhaust Maxima's stack, so it is best used with rational or symbolic weights, and numerical or bigfloat evaluation is preferable otherwise. (iii) Scope: trimmed surfaces, surface--surface intersection, knot removal as a public operation, surface fitting and approximation, and import of CAD exchange formats (IGES, STEP) are not implemented; geometry is exchanged with other tools through the geomdl JSON format and mesh formats only. (iv) Singular points are detected with a relative tolerance on $|S_u\times S_v|$; very close to a singularity the floating-point classification depends on \code{nurbs\_tol}, and bigfloat evaluation is the reliable option (Example~1). (v) The package has been tested with Maxima~5.46.0 on GCL; other Lisp back-ends (SBCL, Clozure CL) are expected to work but have not been systematically tested.
+\emph{Limitations.} Floating-point evaluation is one to two orders of magnitude slower than in geomdl. Exact computations with irrational weights such as $\sqrt2/2$ produce large expressions, and \code{nurbs\_curvature\_sym} can then exhaust Maxima's stack, so rational or symbolic weights are preferable there. Trimmed surfaces, surface intersection, knot removal as a public operation, surface fitting and IGES/STEP import are not implemented. Singular-point detection depends on \code{nurbs\_tol} in floating point. Only the GCL build of Maxima has been tested systematically.
 
 %% ===========================================================================
 \section{Conclusions}
 \label{sec:conclusions}
 
-\pkg{} brings the standard NURBS algorithms, a coherent differential-geometry layer and common exchange formats to the free computer algebra system Maxima, with a single code base for exact, symbolic, double and arbitrary-precision arithmetic. Cross-validation against NURBS-Python agrees to $2.3\times10^{-13}$, and the examples show results that floating-point libraries cannot give directly: curvature at a singular pole with at least 24 correct digits, and design sensitivities in closed form. Planned work includes trimmed surfaces, knot removal, surface fitting, faster evaluation through compiled kernels, testing on other Lisp back-ends, and a classroom evaluation of the package as teaching material.
+\pkg{} brings the standard NURBS algorithms and the differential geometry of NURBS surfaces to the free computer algebra system Maxima, with one code base for exact, symbolic, double and arbitrary-precision arithmetic. It agrees with NURBS-Python to $2.3\times10^{-13}$ and gives results that floating-point libraries cannot give directly: curvature at a singular pole with at least 24 correct digits and design sensitivities in closed form. Planned work includes trimmed surfaces, knot removal, surface fitting, faster compiled kernels, tests on other Lisp builds and a classroom evaluation.
 
 %% ===========================================================================
 \section*{CRediT authorship contribution statement}
@@ -375,7 +357,7 @@ The authors declare that they have no known competing financial interests or per
 During the preparation of this work the authors used Gemini (Google) and Claude (Anthropic) to assist with writing and testing parts of the software code, language refinement, structural clarity of the manuscript, and consistency of the mathematical notation. All code generated with these tools was reviewed by the authors and validated with the regression suite and the independent cross-validation described in Section~\ref{sec:examples}; the design of the package, the mathematical content and the scientific conclusions are the authors' own. After using these tools, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.
 
 \section*{Data availability}
-All data and scripts needed to reproduce the results are included in the software repository \url{https://github.com/ronaldpaul78/NURBS-Maxima}, archived at \url{https://doi.org/10.5281/zenodo.24523238}: \code{tests/} (regression suite, accuracy table, cross-validation and benchmarks) and \code{docs/softwarex/figures/} (figure data).
+The package, its tests and examples are archived as release v2.0.0 at \url{https://doi.org/10.5281/zenodo.24523238}. The repository \url{https://github.com/ronaldpaul78/NURBS-Maxima} also contains, in \code{docs/softwarex/}, the scripts and data of the figures of this article and a table of commands that reproduce every reported number.
 
 \section*{Acknowledgements}
 The authors thank the Universidad Nacional de Piura (Piura, Peru) for funding this work.
