@@ -1,0 +1,54 @@
+/* ==========================================================================
+   Example 02 (basic) -- The exact NURBS circle
+   Quadratic rational representation with 9 control points and weights
+   1 and sqrt(2)/2.
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+
+C : nurbs_circle(1)$
+nurbs_info(C)$
+print("Knots  :", C@knots)$
+print("Weights:", C@weights)$
+
+/* 1. Exactness: x(t)^2 + y(t)^2 = 1 symbolically on every span */
+for e in nurbs_curve_expr(C, t) do
+  print("span", e[1], ":  x^2 + y^2 =", ratsimp(e[2] . e[2], algebraic))$
+print("C(1/8) =", ratsimp(nurbs_curve_point(C, 1/8), algebraic), " (= (1/sqrt2, 1/sqrt2))")$
+
+/* 2. Constant curvature 1/r and length 2 pi r */
+C3 : nurbs_circle(3, [1, 2])$
+print("Curvature for r = 3:", makelist(nurbs_curve_curvature(C3, k/10.0), k, 0, 10))$
+print("Length for r = 3:", nurbs_curve_length(C3), " (6 pi =", float(6*%pi), ")")$
+
+/* 3. The parameterisation is NOT by arc length: |C'(u)| varies */
+print("|C'(u)| at u = 0, 1/16, 1/8:",
+      map(lambda([u], float(nurbs__norm(nurbs_curve_derivs(C, u, 1)[2]))), [0, 1/16, 1/8]))$
+
+/* 4. Weights matter: with all weights 1 the curve is not a circle */
+Cpoly : nurbs_curve(2, C@knots, C@ctrlpts)$
+print("Radius at u = 1/8 with all weights = 1:", float(nurbs__norm(nurbs_curve_point(Cpoly, 1/8))))$
+
+/* 5. Transformations: non-uniform scaling (ellipse), rotation, and a
+      projective map (the image of a circle is another exact conic)        */
+E : nurbs_rotate(nurbs_scale(C, [2, 1]), z, %pi/6)$
+print("Rotated ellipse at u = 0:", float(nurbs_curve_point(E, 0)))$
+Cp : nurbs_transform(C, matrix([1,0,0,0],[0,1,0,0],[0,0,1,0],[0.3,0,0,1]))$
+
+/* 6. Knot insertion and degree elevation keep the circle exact */
+Ci : nurbs_curve_insert_knot(C, 1/3, 1)$
+print("After inserting u = 1/3:", length(Ci@ctrlpts), "control points; C(0.7) unchanged:",
+      float(nurbs_curve_point(Ci, 0.7) - nurbs_curve_point(C, 0.7)))$
+Ce : nurbs_curve_elevate_degree(C, 1)$
+print("Degree 3 circle:", length(Ce@ctrlpts), "control points; x^2+y^2 on its spans =",
+      map(lambda([e], ratsimp(e[2] . e[2], algebraic)), nurbs_curve_expr(Ce, t)))$
+
+/* 7. A circle in a tilted plane has zero torsion */
+C3d : nurbs_circle_3d([0, 0, 1], 1, [1, 0, 0], [0, 1/sqrt(2), 1/sqrt(2)])$
+print("Torsion of the 3-D circle:", nurbs_curve_torsion(C3d, 0.3))$
+
+/* 8. Plots and export */
+if nurbs_show_plots then nurbs_plot([C, E, Cp], control = false)$
+nurbs_export_plot(C, sconcat(dir, "02_circle.png"))$
+nurbs_export_curve_csv(C, sconcat(dir, "02_circle.csv"), 64)$
+print("Files: 02_circle.png, 02_circle.csv")$

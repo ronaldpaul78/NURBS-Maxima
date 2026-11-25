@@ -1,0 +1,1353 @@
+/* ==========================================================================
+   NURBS-Maxima -- NURBS curves and surfaces for Maxima / wxMaxima
+   --------------------------------------------------------------------------
+   File    : nurbs_maxima.mac
+   Version : 2.0.0
+   License : MIT (see LICENSE)
+
+   Usage:
+       load("path/to/nurbs_maxima.mac")$
+
+   Conventions (see docs/API.md):
+     * Mathematical indices (knot span i, basis functions N_{i,p}, control
+       points P_i) start at 0, as in Piegl & Tiller, "The NURBS Book"
+       (2nd ed., 1997).  Maxima lists start at 1, so P_i is C@ctrlpts[i+1].
+     * A point is a list [x,y] or [x,y,z].
+     * A curve is a structure  nurbscrv(degree, knots, ctrlpts, weights).
+     * A surface is  nurbssrf(degree_u, degree_v, knots_u, knots_v,
+       ctrlpts, weights), with ctrlpts[i+1][j+1] = P_{i,j} (i along u).
+     * Every routine accepts exact arithmetic (rationals, radicals, symbolic
+       weights), double floats or bigfloats.  The type of the parameter
+       decides the type of the result: exact in -> exact out, float in ->
+       float out, bfloat in -> bfloat out (precision fpprec).
+
+   Stages:
+     1. Mathematical core      (B-spline bases, knot vectors)
+     2. NURBS curves           (evaluation, derivatives, weights, transforms,
+                                knot insertion/refinement, degree elevation,
+                                Bezier decomposition, interpolation, inversion)
+     3. NURBS surfaces         (evaluation, normals, meshes, the same modelling
+                                operations along u or v)
+     4. Differential geometry  (K, H, principal curvatures, singular points,
+                                area, volume, total curvature)
+     5. Visualisation/export   (draw/gnuplot, OBJ/STL/VTK/CSV/JSON)
+     6. Validation             (see tests/ and docs/)
+   ========================================================================== */
+
+nurbs_version : "2.0.0"$
+
+/* Global tolerance.  Used for every floating-point zero test, for knot
+   equality with float knots, and (relative) for singular, umbilic and
+   planar point detection.                                                  */
+nurbs_tol : 1.0e-10$
+
+/* Graphics output: auto | true | false.  auto -> inline in wxMaxima */
+nurbs_inline : auto$
+
+/* The example files only open plot windows when this is true */
+if not ?boundp('nurbs_show_plots) then nurbs_show_plots : true$
+
+if not ?fboundp('draw) then load("draw")$
+if not ?fboundp('linsolve_by_lu) then load("linearalgebra")$
+
+/* ==========================================================================
+   0. INTERNAL UTILITIES (prefix nurbs__)
+   ========================================================================== */
+
+/* Numeric kind of an expression: 'bfloat, 'float or false (exact/symbolic) */
+nurbs__kind(x) := block([k: false],
+  if bfloatp(x) then return('bfloat),
+  if floatnump(x) then return('float),
+  if atom(x) then return(false),
+  for e in args(x) do block([ke: nurbs__kind(e)],
+    if ke = 'bfloat then k: 'bfloat
+    elseif ke = 'float and k = false then k: 'float),
+  k)$
+
+nurbs__has_float(x) := is(nurbs__kind(x) # false)$
+
+/* Convert to the numeric kind of x (bfloat if x has bfloats, else float) */
+nurbs__num(x) := if nurbs__kind(x) = 'bfloat then bfloat(x) else float(x)$
+
+/* Convert the result r to the numeric kind of the parameter t */
+nurbs__finish(r, t) := block([k: nurbs__kind(t)],
+  if k = 'bfloat then bfloat(r) elseif k = 'float then float(r) else r)$
+
+/* Zero test.
+     floating-point (float or bfloat) value -> |x| <= nurbs_tol
+     exact constant (rationals, radicals)   -> radcan(x) = 0
+     symbolic expression                    -> ratsimp(x) = 0
+   Always returns true or false (never unknown).                            */
+nurbs__zero(x) := block([r],
+  r: if numberp(x) and not nurbs__has_float(x) then is(x = 0)
+     elseif nurbs__has_float(x) then is(abs(x) <= nurbs_tol)
+     elseif constantp(x) then is(radcan(x) = 0)
+     else is(ratsimp(x) = 0),
+  is(r = true))$
+
+/* Numerical "x < 0" that is false (not an error) for symbolic input */
+nurbs__negative(x) := block([y: nurbs__num(x)], is(numberp(y) and y < 0))$
+
+nurbs__norm(v) := sqrt(v . v)$
+
+nurbs__pad3(v) := if length(v) = 2 then [v[1], v[2], 0] else v$
+
+nurbs__cross(a, b) := block([x: nurbs__pad3(a), y: nurbs__pad3(b)],
+  [x[2]*y[3] - x[3]*y[2], x[3]*y[1] - x[1]*y[3], x[1]*y[2] - x[2]*y[1]])$
+
+nurbs__unit(v) := block([n: nurbs__norm(v)],
+  if nurbs__zero(n) then und else v / n)$
+
+/* Homogeneous coordinates: P=[x,y,z], w  ->  [w x, w y, w z, w] */
+nurbs__hom(P, w) := append(w * P, [w])$
+nurbs__dehom(Pw) := rest(Pw, -1) / last(Pw)$
+
+nurbs__zerovec(n) := makelist(0, k, 1, n)$
+
+/* Vertex index of grid node (i,j) in a mesh with nv+1 nodes per row.
+   NOTE: functional arguments are always called through apply(f, [...]):
+   in Maxima a call f(x) uses a global function named f, if the user has
+   defined one, even when a local variable f holds another function.      */
+nurbs__grid_id(i, j, nv, o) := i * (nv + 1) + j + o$
+
+/* Options of the form [key = value, ...] */
+nurbs__opt(opts, key, default) := block([r: default],
+  for e in opts do
+    if not atom(e) and op(e) = "=" and lhs(e) = key then r: rhs(e),
+  r)$
+
+nurbs__drop_opts(opts, keys) :=
+  sublist(opts, lambda([e], atom(e) or op(e) # "=" or not member(lhs(e), keys)))$
+
+/* 5-point Gauss-Legendre rule on [-1,1] (double precision) */
+nurbs__gauss5 : [
+  [-0.9061798459386640, 0.2369268850561891],
+  [-0.5384693101056831, 0.4786286704993665],
+  [ 0.0,                0.5688888888888889],
+  [ 0.5384693101056831, 0.4786286704993665],
+  [ 0.9061798459386640, 0.2369268850561891]]$
+
+/* ==========================================================================
+   STAGE 1.  MATHEMATICAL CORE: B-SPLINE BASES AND KNOT VECTORS
+   ========================================================================== */
+
+/* ---- Knot vectors -------------------------------------------------------- */
+
+/* Clamped (open) uniform knot vector for n control points and degree p */
+knots_clamped_uniform(n, p) := block(
+  if n < p + 1 then error("knots_clamped_uniform: at least p+1 control points are required"),
+  append(makelist(0, k, 1, p + 1),
+         makelist(j / (n - p), j, 1, n - p - 1),
+         makelist(1, k, 1, p + 1)))$
+
+/* Uniform (unclamped) knot vector 0, 1/(n+p), ..., 1 */
+knots_uniform(n, p) := makelist(j / (n + p), j, 0, n + p)$
+
+/* Bezier knot vector of degree p */
+knots_bezier(p) := append(makelist(0, k, 1, p + 1), makelist(1, k, 1, p + 1))$
+
+knots_multiplicity(u, U) := length(sublist(U, lambda([x], nurbs__zero(x - u))))$
+
+knots_unique(U) := block([r: [first(U)]],
+  for x in rest(U) do if not nurbs__zero(x - last(r)) then r: endcons(x, r),
+  r)$
+
+knots_normalize(U) := (U - first(U)) / (last(U) - first(U))$
+
+knots_is_clamped(U, p) :=
+  is(knots_multiplicity(first(U), U) >= p + 1 and
+     knots_multiplicity(last(U), U) >= p + 1)$
+
+/* Non-empty spans [[i, U_i, U_{i+1}], ...] (i from 0) */
+knots_spans(U) := block([r: []],
+  for i:0 thru length(U) - 2 do
+    if not nurbs__zero(U[i + 2] - U[i + 1]) then r: endcons([i, U[i + 1], U[i + 2]], r),
+  r)$
+
+/* Non-empty spans inside the domain [U_p, U_{n+1}] */
+knots_domain_spans(U, p) :=
+  sublist(knots_spans(U), lambda([s], s[1] >= p and s[1] <= length(U) - p - 2))$
+
+/* Parametric continuity at each interior knot: [[u, k], ...] means C^k */
+knots_continuity(U, p) := block([uu: knots_unique(U)],
+  map(lambda([x], [x, p - knots_multiplicity(x, U)]), rest(rest(uu, -1), 1)))$
+
+/* Full validation of a knot vector for n control points and degree p.
+   Returns true or raises a descriptive error.                             */
+knots_validate(U, p, n) := block([m],
+  if not listp(U) then error("knots_validate: the knot vector must be a list"),
+  if not integerp(p) or p < 1 then error("knots_validate: the degree must be an integer >= 1"),
+  m: length(U),
+  if m # n + p + 1 then
+    error("knots_validate: expected", n + p + 1, "knots (n+p+1) but got", m),
+  for k:1 thru m - 1 do
+    if nurbs__negative(U[k + 1] - U[k]) then
+      error("knots_validate: the knot vector decreases at position", k),
+  for x in knots_unique(U) do
+    if knots_multiplicity(x, U) > p + 1 then
+      error("knots_validate: multiplicity greater than p+1 at u =", x),
+  true)$
+
+/* ---- Data parameterisation (interpolation) ------------------------------ */
+
+params_uniform(Q) := block([n: length(Q) - 1], makelist(k / n, k, 0, n))$
+
+/* Chord-length (e = 1) or centripetal (e = 1/2) parameters.  Consecutive
+   coincident points are rejected (they would give a zero chord).          */
+nurbs__params_pow(Q, e) := block([d, tot, s: 0, r: [0], Qn: nurbs__num(Q)],
+  d: makelist(nurbs__norm(Qn[k + 1] - Qn[k])^e, k, 1, length(Q) - 1),
+  for k:1 thru length(d) do
+    if nurbs__zero(d[k]) then
+      error("params: data points", k, "and", k + 1, "coincide (zero chord length)"),
+  tot: apply("+", d),
+  for k:1 thru length(d) - 1 do (s: s + d[k], r: endcons(s / tot, r)),
+  nurbs__num(endcons(1, r)))$
+
+params_chord(Q)       := nurbs__params_pow(Q, 1)$
+params_centripetal(Q) := nurbs__params_pow(Q, 1/2)$
+
+/* Knot vector by averaging (Piegl & Tiller, eq. 9.8) */
+knots_averaging(t, p) := block([n: length(t) - 1],
+  append(makelist(0, k, 1, p + 1),
+         makelist(sum(t[i + 1], i, j, j + p - 1) / p, j, 1, n - p),
+         makelist(1, k, 1, p + 1)))$
+
+/* ---- B-spline basis functions ------------------------------------------ */
+
+/* Algorithm A2.1: span index i (0-based) with U_i <= u < U_{i+1}.
+   n = (number of control points) - 1.                                     */
+nurbs_find_span(n, p, u, U) := block([low, high, mid],
+  if is(u >= U[n + 2]) then return(n),
+  if is(u <= U[p + 1]) then return(p),
+  low: p, high: n + 1, mid: floor((low + high) / 2),
+  while is(u < U[mid + 1] or u >= U[mid + 2]) do (
+    if is(u < U[mid + 1]) then high: mid else low: mid,
+    mid: floor((low + high) / 2)),
+  mid)$
+
+/* Algorithm A2.2: the p+1 non-zero basis functions
+   [N_{i-p,p}(u), ..., N_{i,p}(u)] on span i.  Works with symbolic u
+   (returns the exact polynomials of the span).                            */
+nurbs_basis_funs(i, u, p, U) := block([N, left, right, saved, temp],
+  N: makelist(0, k, 0, p), N[1]: 1,
+  left: makelist(0, k, 0, p), right: makelist(0, k, 0, p),
+  for j:1 thru p do (
+    left[j + 1]: u - U[i + 2 - j],
+    right[j + 1]: U[i + j + 1] - u,
+    saved: 0,
+    for r:0 thru j - 1 do (
+      temp: N[r + 1] / (right[r + 2] + left[j - r + 1]),
+      N[r + 1]: saved + right[r + 2] * temp,
+      saved: left[j - r + 1] * temp),
+    N[j + 1]: saved),
+  N)$
+
+/* Algorithm A2.3: derivatives of the non-zero basis functions.
+   Returns an (n+1) x (p+1) matrix D with D[k+1, j+1] = d^k/du^k N_{i-p+j,p}(u). */
+nurbs_ders_basis_funs(i, u, p, n, U) := block(
+  [ndu, a, ders, left, right, saved, temp, s1, s2, d, rk, pk, j1, j2, rr, nn],
+  nn: min(n, p),
+  ndu: zeromatrix(p + 1, p + 1), ndu[1, 1]: 1,
+  left: makelist(0, k, 0, p), right: makelist(0, k, 0, p),
+  for j:1 thru p do (
+    left[j + 1]: u - U[i + 2 - j],
+    right[j + 1]: U[i + j + 1] - u,
+    saved: 0,
+    for r:0 thru j - 1 do (
+      ndu[j + 1, r + 1]: right[r + 2] + left[j - r + 1],
+      temp: ndu[r + 1, j] / ndu[j + 1, r + 1],
+      ndu[r + 1, j + 1]: saved + right[r + 2] * temp,
+      saved: left[j - r + 1] * temp),
+    ndu[j + 1, j + 1]: saved),
+  ders: zeromatrix(n + 1, p + 1),
+  for j:0 thru p do ders[1, j + 1]: ndu[j + 1, p + 1],
+  a: zeromatrix(2, p + 1),
+  for r:0 thru p do (
+    s1: 0, s2: 1, a[1, 1]: 1,
+    for k:1 thru nn do (
+      d: 0, rk: r - k, pk: p - k,
+      if r >= k then (
+        a[s2 + 1, 1]: a[s1 + 1, 1] / ndu[pk + 2, rk + 1],
+        d: a[s2 + 1, 1] * ndu[rk + 1, pk + 1]),
+      j1: if rk >= -1 then 1 else -rk,
+      j2: if r - 1 <= pk then k - 1 else p - r,
+      for j:j1 thru j2 do (
+        a[s2 + 1, j + 1]: (a[s1 + 1, j + 1] - a[s1 + 1, j]) / ndu[pk + 2, rk + j + 1],
+        d: d + a[s2 + 1, j + 1] * ndu[rk + j + 1, pk + 1]),
+      if r <= pk then (
+        a[s2 + 1, k + 1]: -a[s1 + 1, k] / ndu[pk + 2, r + 1],
+        d: d + a[s2 + 1, k + 1] * ndu[r + 1, pk + 1]),
+      ders[k + 1, r + 1]: d,
+      [s1, s2]: [s2, s1])),
+  rr: p,
+  for k:1 thru nn do (
+    for j:0 thru p do ders[k + 1, j + 1]: ders[k + 1, j + 1] * rr,
+    rr: rr * (p - k)),
+  ders)$
+
+/* Checks that i is a non-empty span inside the domain */
+nurbs__check_span(i, p, U) :=
+  if i < p or i > length(U) - p - 2 or nurbs__zero(U[i + 2] - U[i + 1]) then
+    error("Span", i, "is empty or outside the domain; valid spans:",
+          map(first, knots_domain_spans(U, p)))$
+
+/* Cox-de Boor recursion: N_{i,p}(u) for numeric u (i from 0).
+   At u = U_m the last non-empty span is used (left continuity at the end). */
+bspline_basis(i, p, u, U) := block([m: length(U), a, b],
+  if p = 0 then (
+    if is(U[i + 1] <= u and u < U[i + 2]) then 1
+    elseif nurbs__zero(u - U[m]) and nurbs__zero(U[i + 2] - U[m])
+           and is(U[i + 1] < U[i + 2]) then 1
+    else 0)
+  else (
+    a: if nurbs__zero(U[i + p + 1] - U[i + 1]) then 0
+       else (u - U[i + 1]) / (U[i + p + 1] - U[i + 1]) * bspline_basis(i, p - 1, u, U),
+    b: if nurbs__zero(U[i + p + 2] - U[i + 2]) then 0
+       else (U[i + p + 2] - u) / (U[i + p + 2] - U[i + 2]) * bspline_basis(i + 1, p - 1, u, U),
+    a + b))$
+
+/* Exact polynomial pieces of N_{i,p}: [[[a,b], polynomial in u], ...] */
+bspline_basis_piecewise(i, p, U, u) := block([r: [], k, N],
+  for s in knots_domain_spans(U, p) do (
+    k: s[1],
+    if i >= k - p and i <= k then (
+      N: nurbs_basis_funs(k, u, p, U),
+      r: endcons([[s[2], s[3]], expand(ratsimp(N[i - k + p + 1]))], r))
+    else r: endcons([[s[2], s[3]], 0], r)),
+  r)$
+
+/* All basis functions N_{0..n-1,p}(u) at one parameter */
+bspline_basis_all(p, u, U) := block([n: length(U) - p - 1, span, N, r],
+  span: nurbs_find_span(n - 1, p, u, U),
+  N: nurbs_basis_funs(span, u, p, U),
+  r: makelist(0, k, 1, n),
+  for j:0 thru p do r[span - p + j + 1]: N[j + 1],
+  nurbs__finish(r, u))$
+
+/* Bernstein polynomials B_{i,n}(t) */
+bernstein(i, n, t) := binomial(n, i) * t^i * (1 - t)^(n - i)$
+
+/* ==========================================================================
+   STAGE 2.  NURBS CURVES
+   ========================================================================== */
+
+defstruct(nurbscrv(degree, knots, ctrlpts, weights))$
+
+nurbs_curve_p(c) := is(not atom(c) and op(c) = 'nurbscrv)$
+
+/* Constructor:  nurbs_curve(p, U, P [, W])   (W = weights, default 1).
+   Weights may be symbolic; numeric weights must be positive.              */
+nurbs_curve(p, U, P, [W]) := block([n: length(P), w],
+  w: if W = [] then makelist(1, k, 1, n) else first(W),
+  if length(w) # n then error("nurbs_curve: number of weights differs from number of control points"),
+  for X in P do if length(X) # length(first(P)) then
+    error("nurbs_curve: all control points must have the same dimension"),
+  knots_validate(U, p, n),
+  for x in w do
+    if constantp(x) and not nurbs__negative(-x) then
+      error("nurbs_curve: numeric weights must be positive; got", x),
+  new(nurbscrv(p, U, P, w)))$
+
+bspline_curve(p, U, P) := nurbs_curve(p, U, P)$
+
+/* Bezier curve (rational when weights are given), domain [0,1] */
+nurbs_bezier_curve(P, [W]) := block([p: length(P) - 1],
+  apply(nurbs_curve, append([p, knots_bezier(p), P], W)))$
+
+nurbs_line(A, B) := nurbs_curve(1, [0, 0, 1, 1], [A, B])$
+
+/* Exact circle (9 points, degree 2, weights 1 and sqrt(2)/2) in the plane
+   spanned by the orthonormal vectors e1, e2, centre C, radius r.          */
+nurbs_circle_3d(C, r, e1, e2) := block([s: sqrt(2)/2, dirs],
+  dirs: [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1],[1,0]],
+  nurbs_curve(2, [0,0,0,1/4,1/4,1/2,1/2,3/4,3/4,1,1,1],
+    map(lambda([d], C + r*d[1]*e1 + r*d[2]*e2), dirs),
+    [1, s, 1, s, 1, s, 1, s, 1]))$
+
+/* Circle of radius r: 2-D by default, 3-D (plane z = const) if the centre
+   has 3 coordinates.                                                      */
+nurbs_circle(r, [C]) := block([c: if C = [] then [0, 0] else first(C)],
+  if length(c) = 2 then nurbs_circle_3d(c, r, [1, 0], [0, 1])
+  else nurbs_circle_3d(c, r, [1, 0, 0], [0, 1, 0]))$
+
+nurbs_curve_ctrlptsw(C) := map(nurbs__hom, C@ctrlpts, C@weights)$
+
+/* Build a curve from homogeneous control points */
+nurbs__curve_from_w(p, U, Qw) := nurbs_curve(p, U, map(nurbs__dehom, Qw), map(last, Qw))$
+
+/* Parametric domain [U_p, U_{n+1}] */
+nurbs_curve_domain(C) := block([U: C@knots, p: C@degree],
+  [U[p + 1], U[length(U) - p]])$
+
+/* Algorithm A4.1: curve point C(u) */
+nurbs_curve_point(C, u) := block(
+  [p: C@degree, U: C@knots, P: C@ctrlpts, W: C@weights, n, span, N, Cw: 0, k],
+  n: length(P) - 1,
+  span: nurbs_find_span(n, p, u, U),
+  N: nurbs_basis_funs(span, u, p, U),
+  for j:0 thru p do (k: span - p + j + 1, Cw: Cw + N[j + 1] * nurbs__hom(P[k], W[k])),
+  nurbs__finish(nurbs__dehom(Cw), u))$
+
+/* Derivatives of the homogeneous curve C^w(u) up to order d (Alg. A3.2) */
+nurbs__curve_derivs_w(C, u, d) := block(
+  [p: C@degree, U: C@knots, P: C@ctrlpts, W: C@weights, n, span, du, nd, CK, Pw],
+  n: length(P) - 1, du: min(d, p),
+  span: nurbs_find_span(n, p, u, U),
+  nd: nurbs_ders_basis_funs(span, u, p, du, U),
+  Pw: makelist(nurbs__hom(P[span - p + j + 1], W[span - p + j + 1]), j, 0, p),
+  CK: makelist(nurbs__zerovec(length(P[1]) + 1), k, 0, d),
+  for k:0 thru du do
+    for j:0 thru p do CK[k + 1]: CK[k + 1] + nd[k + 1, j + 1] * Pw[j + 1],
+  CK)$
+
+/* Algorithm A4.2: derivatives of the rational curve.
+   Returns [C(u), C'(u), ..., C^(d)(u)].                                   */
+nurbs_curve_derivs(C, u, d) := block([CKw, A, w, CK, v],
+  CKw: nurbs__curve_derivs_w(C, u, d),
+  A: map(lambda([x], rest(x, -1)), CKw),
+  w: map(last, CKw),
+  CK: makelist(0, k, 0, d),
+  for k:0 thru d do (
+    v: A[k + 1],
+    for i:1 thru k do v: v - binomial(k, i) * w[i + 1] * CK[k - i + 1],
+    CK[k + 1]: v / w[1]),
+  nurbs__finish(CK, u))$
+
+nurbs_curve_tangent(C, u) := nurbs__unit(nurbs_curve_derivs(C, u, 1)[2])$
+
+/* Exact rational expression of the curve on span i (0-based) in terms of
+   the symbol t: [x(t), y(t), ...].                                        */
+nurbs_curve_span_expr(C, i, t) := block(
+  [p: C@degree, U: C@knots, Pw: nurbs_curve_ctrlptsw(C), N, Cw: 0, algebraic: true],
+  nurbs__check_span(i, p, U),
+  N: nurbs_basis_funs(i, t, p, U),
+  for j:0 thru p do Cw: Cw + N[j + 1] * Pw[i - p + j + 1],
+  map(ratsimp, nurbs__dehom(Cw)))$
+
+/* Piecewise representation [[[a,b], [x(t), y(t), ...]], ...] */
+nurbs_curve_expr(C, t) :=
+  map(lambda([s], [[s[2], s[3]], nurbs_curve_span_expr(C, s[1], t)]),
+      knots_domain_spans(C@knots, C@degree))$
+
+/* ---- Weights ------------------------------------------------------------- */
+
+/* New curve with w_i = w (i from 0); w may be symbolic */
+nurbs_set_weight(C, i, w) := block([W: copylist(C@weights)],
+  W[i + 1]: w,
+  nurbs_curve(C@degree, C@knots, C@ctrlpts, W))$
+
+/* Multiplying every weight by a constant leaves the curve unchanged */
+nurbs_scale_weights(C, c) := nurbs_curve(C@degree, C@knots, C@ctrlpts, c * C@weights)$
+
+/* true when the weights are not all equal (works with symbolic weights) */
+nurbs_is_rational(obj) := block([W: flatten(obj@weights)],
+  not every(lambda([x], nurbs__zero(x - first(W))), W))$
+
+/* ---- Transformations ----------------------------------------------------- */
+
+nurbs_translation_matrix(t) := block([v: nurbs__pad3(t)],
+  matrix([1, 0, 0, v[1]], [0, 1, 0, v[2]], [0, 0, 1, v[3]], [0, 0, 0, 1]))$
+
+nurbs_scaling_matrix(s) := block([v: if listp(s) then nurbs__pad3(s) else [s, s, s]],
+  matrix([v[1], 0, 0, 0], [0, v[2], 0, 0], [0, 0, v[3], 0], [0, 0, 0, 1]))$
+
+/* Rotation by th about 'x, 'y, 'z or an arbitrary vector (Rodrigues) */
+nurbs_rotation_matrix(axis, th) := block([a, c: cos(th), s: sin(th), x, y, z, R],
+  a: if axis = 'x then [1, 0, 0] elseif axis = 'y then [0, 1, 0]
+     elseif axis = 'z then [0, 0, 1] else nurbs__unit(axis),
+  [x, y, z]: a,
+  R: matrix(
+    [c + x^2*(1 - c),   x*y*(1 - c) - z*s, x*z*(1 - c) + y*s],
+    [y*x*(1 - c) + z*s, c + y^2*(1 - c),   y*z*(1 - c) - x*s],
+    [z*x*(1 - c) - y*s, z*y*(1 - c) + x*s, c + z^2*(1 - c)]),
+  matrix(endcons(0, R[1]), endcons(0, R[2]), endcons(0, R[3]), [0, 0, 0, 1]))$
+
+/* Apply a 4x4 (affine or projective) matrix to a weighted point */
+nurbs__transform_point(M, P, w) := block([d: length(P), h, X],
+  h: nurbs__hom(nurbs__pad3(P), w),
+  X: list_matrix_entries(M . transpose(matrix(h))),
+  [ (if d = 2 then [X[1], X[2]] else [X[1], X[2], X[3]]) / X[4], X[4] ])$
+
+/* General affine or projective transformation of a curve or surface.
+   Exact, because NURBS are invariant under these maps.                    */
+nurbs_transform(obj, M) := block([r],
+  if nurbs_curve_p(obj) then (
+    r: map(lambda([P, w], nurbs__transform_point(M, P, w)), obj@ctrlpts, obj@weights),
+    nurbs_curve(obj@degree, obj@knots, map(first, r), map(second, r)))
+  elseif nurbs_surface_p(obj) then (
+    r: map(lambda([row, wrow],
+             map(lambda([P, w], nurbs__transform_point(M, P, w)), row, wrow)),
+           obj@ctrlpts, obj@weights),
+    nurbs_surface(obj@degree_u, obj@degree_v, obj@knots_u, obj@knots_v,
+      map(lambda([row], map(first, row)), r),
+      map(lambda([row], map(second, row)), r)))
+  else error("nurbs_transform: a NURBS curve or surface was expected"))$
+
+nurbs_translate(obj, t)     := nurbs_transform(obj, nurbs_translation_matrix(t))$
+nurbs_scale(obj, s)         := nurbs_transform(obj, nurbs_scaling_matrix(s))$
+nurbs_rotate(obj, axis, th) := nurbs_transform(obj, nurbs_rotation_matrix(axis, th))$
+
+/* ---- Fundamental algorithms (Piegl & Tiller, chapter 5) ----------------- */
+
+/* Algorithm A5.1: insert knot u r times (the curve does not change) */
+nurbs_curve_insert_knot(C, u, r) := block(
+  [p: C@degree, UP: C@knots, Pw: nurbs_curve_ctrlptsw(C), n, k, s, UQ, Qw, Rw, L, alpha, D],
+  n: length(Pw) - 1,
+  D: nurbs_curve_domain(C),
+  if nurbs__negative(u - D[1]) or nurbs__negative(D[2] - u) then
+    error("nurbs_curve_insert_knot: u =", u, "is outside the domain", D),
+  k: nurbs_find_span(n, p, u, UP),
+  s: knots_multiplicity(u, UP),
+  if r + s > p then error("nurbs_curve_insert_knot: the multiplicity would exceed the degree"),
+  if r <= 0 then return(C),
+  UQ: append(makelist(UP[j], j, 1, k + 1), makelist(u, j, 1, r),
+             makelist(UP[j], j, k + 2, length(UP))),
+  Qw: makelist(0, j, 0, n + r),
+  for i:0 thru k - p do Qw[i + 1]: Pw[i + 1],
+  for i:k - s thru n do Qw[i + r + 1]: Pw[i + 1],
+  Rw: makelist(Pw[k - p + i + 1], i, 0, p - s),
+  for j:1 thru r do (
+    L: k - p + j,
+    for i:0 thru p - j - s do (
+      alpha: (u - UP[L + i + 1]) / (UP[i + k + 2] - UP[L + i + 1]),
+      Rw[i + 1]: alpha * Rw[i + 2] + (1 - alpha) * Rw[i + 1]),
+    Qw[L + 1]: Rw[1],
+    Qw[k + r - j - s + 1]: Rw[p - j - s + 1]),
+  L: k - p + r,
+  for i:L + 1 thru k - s - 1 do Qw[i + 1]: Rw[i - L + 1],
+  nurbs__curve_from_w(p, UQ, Qw))$
+
+/* Algorithm A5.4: knot refinement, inserts all values of the list X at once */
+nurbs_curve_refine(C, X) := block(
+  [p: C@degree, U: C@knots, Pw: nurbs_curve_ctrlptsw(C), n, m, r, a, b, i, k, idx, alfa, D],
+  local(UU, PP, Ub, Qw),
+  if X = [] then return(C),
+  X: sort(X), D: nurbs_curve_domain(C),
+  for x in X do
+    if nurbs__negative(x - D[1]) or nurbs__negative(D[2] - x) then
+      error("nurbs_curve_refine: knot", x, "is outside the domain", D),
+  n: length(Pw) - 1, m: n + p + 1, r: length(X) - 1,
+  for j:0 thru m do UU[j]: U[j + 1],
+  for j:0 thru n do PP[j]: Pw[j + 1],
+  a: nurbs_find_span(n, p, X[1], U),
+  b: nurbs_find_span(n, p, X[r + 1], U) + 1,
+  for j:0 thru a - p do Qw[j]: PP[j],
+  for j:b - 1 thru n do Qw[j + r + 1]: PP[j],
+  for j:0 thru a do Ub[j]: UU[j],
+  for j:b + p thru m do Ub[j + r + 1]: UU[j],
+  i: b + p - 1, k: b + p + r,
+  for j:r step -1 thru 0 do (
+    while is(X[j + 1] <= UU[i]) and i > a do (
+      Qw[k - p - 1]: PP[i - p - 1], Ub[k]: UU[i], k: k - 1, i: i - 1),
+    Qw[k - p - 1]: Qw[k - p],
+    for l:1 thru p do (
+      idx: k - p + l, alfa: Ub[k + l] - X[j + 1],
+      if nurbs__zero(alfa) then Qw[idx - 1]: Qw[idx]
+      else (
+        alfa: alfa / (Ub[k + l] - UU[i - p + l]),
+        Qw[idx - 1]: alfa * Qw[idx - 1] + (1 - alfa) * Qw[idx])),
+    Ub[k]: X[j + 1], k: k - 1),
+  nurbs__curve_from_w(p, makelist(Ub[j], j, 0, m + r + 1), makelist(Qw[j], j, 0, n + r + 1)))$
+
+/* Algorithm A5.9: degree elevation by t (the curve does not change; each
+   interior knot keeps its continuity, its multiplicity grows by t).       */
+nurbs_curve_elevate_degree(C, t) := block(
+  [p: C@degree, U: C@knots, Pw: nurbs_curve_ctrlptsw(C), n, m, ph, ph2, mh, kind, r, a, b,
+   cind, ua, ub, i, j, mul, oldr, lbz, rbz, numr, save, s, mpi, first_, last_, den, bet,
+   alf, gam, kj, inv, dim, nh],
+  local(bezalfs, bpts, ebpts, Nextbpts, alfs, Uh, Qw, UU, PP),
+  if not integerp(t) or t < 0 then error("nurbs_curve_elevate_degree: t must be an integer >= 0"),
+  if t = 0 then return(C),
+  n: length(Pw) - 1, m: n + p + 1, ph: p + t, ph2: floor(ph / 2), dim: length(Pw[1]),
+  for k:0 thru m do UU[k]: U[k + 1],
+  for k:0 thru n do PP[k]: Pw[k + 1],
+  for k:0 thru ph do for l:0 thru p do bezalfs[k, l]: 0,
+  bezalfs[0, 0]: 1, bezalfs[ph, p]: 1,
+  for k:1 thru ph2 do (
+    inv: 1 / binomial(ph, k), mpi: min(p, k),
+    for l:max(0, k - t) thru mpi do bezalfs[k, l]: inv * binomial(p, l) * binomial(t, k - l)),
+  for k:ph2 + 1 thru ph - 1 do (
+    mpi: min(p, k),
+    for l:max(0, k - t) thru mpi do bezalfs[k, l]: bezalfs[ph - k, p - l]),
+  mh: ph, kind: ph + 1, r: -1, a: p, b: p + 1, cind: 1, ua: UU[0],
+  Qw[0]: PP[0],
+  for k:0 thru ph do Uh[k]: ua,
+  for k:0 thru p do bpts[k]: PP[k],
+  while b < m do (
+    i: b,
+    while b < m and nurbs__zero(UU[b] - UU[b + 1]) do b: b + 1,
+    mul: b - i + 1, mh: mh + mul + t, ub: UU[b],
+    oldr: r, r: p - mul,
+    lbz: if oldr > 0 then floor((oldr + 2) / 2) else 1,
+    rbz: if r > 0 then ph - floor((r + 1) / 2) else ph,
+    if r > 0 then (
+      numr: ub - ua,
+      for k:p step -1 thru mul + 1 do alfs[k - mul - 1]: numr / (UU[a + k] - ua),
+      for jj:1 thru r do (
+        save: r - jj, s: mul + jj,
+        for k:p step -1 thru s do
+          bpts[k]: alfs[k - s] * bpts[k] + (1 - alfs[k - s]) * bpts[k - 1],
+        Nextbpts[save]: bpts[p])),
+    for k:lbz thru ph do (
+      ebpts[k]: nurbs__zerovec(dim), mpi: min(p, k),
+      for l:max(0, k - t) thru mpi do ebpts[k]: ebpts[k] + bezalfs[k, l] * bpts[l]),
+    if oldr > 1 then (
+      first_: kind - 2, last_: kind, den: ub - ua, bet: (ub - Uh[kind - 1]) / den,
+      for tr:1 thru oldr - 1 do (
+        i: first_, j: last_, kj: j - kind + 1,
+        while j - i > tr do (
+          if i < cind then (
+            alf: (ub - Uh[i]) / (ua - Uh[i]),
+            Qw[i]: alf * Qw[i] + (1 - alf) * Qw[i - 1]),
+          if j >= lbz then (
+            if j - tr <= kind - ph + oldr then (
+              gam: (ub - Uh[j - tr]) / den,
+              ebpts[kj]: gam * ebpts[kj] + (1 - gam) * ebpts[kj + 1])
+            else ebpts[kj]: bet * ebpts[kj] + (1 - bet) * ebpts[kj + 1]),
+          i: i + 1, j: j - 1, kj: kj - 1),
+        first_: first_ - 1, last_: last_ + 1)),
+    if a # p then for k:0 thru ph - oldr - 1 do (Uh[kind]: ua, kind: kind + 1),
+    for k:lbz thru rbz do (Qw[cind]: ebpts[k], cind: cind + 1),
+    if b < m then (
+      for k:0 thru r - 1 do bpts[k]: Nextbpts[k],
+      for k:r thru p do bpts[k]: PP[b - p + k],
+      a: b, b: b + 1, ua: ub)
+    else for k:0 thru ph do Uh[kind + k]: ub),
+  nh: mh - ph - 1,
+  nurbs__curve_from_w(ph, makelist(Uh[k], k, 0, nh + ph + 1), makelist(Qw[k], k, 0, nh)))$
+
+/* Knots that must be inserted so every interior knot has multiplicity p */
+nurbs__bezier_knots(U, p) := block([X: [], D: [U[p + 1], U[length(U) - p]]],
+  for x in knots_unique(U) do
+    if not nurbs__zero(x - D[1]) and not nurbs__zero(x - D[2])
+       and nurbs__negative(D[1] - x) and nurbs__negative(x - D[2]) then
+      X: append(X, makelist(x, k, 1, p - knots_multiplicity(x, U))),
+  X)$
+
+/* Algorithm A5.6 (Bezier decomposition, via knot refinement).
+   Returns the list of Bezier segments; segment k keeps its parameter
+   interval [a,b] (knots a..a, b..b), as needed for Bezier extraction.     */
+nurbs_curve_decompose(C) := block([p: C@degree, R, U, P, W, nseg, a, b, sp],
+  R: nurbs_curve_refine(C, nurbs__bezier_knots(C@knots, p)),
+  U: R@knots, P: R@ctrlpts, W: R@weights,
+  sp: knots_domain_spans(U, p),
+  makelist(block([k: (s - 1) * p, iv: sp[s]],
+      nurbs_curve(p, append(makelist(iv[2], j, 0, p), makelist(iv[3], j, 0, p)),
+                  makelist(P[k + j + 1], j, 0, p), makelist(W[k + j + 1], j, 0, p))),
+    s, 1, length(sp)))$
+
+/* Split the curve at an interior parameter u: returns [C1, C2] */
+nurbs_curve_split(C, u) := block([p: C@degree, s, Dm, D, U, P, W, k],
+  Dm: nurbs_curve_domain(C),
+  if not (nurbs__negative(Dm[1] - u) and nurbs__negative(u - Dm[2])) then
+    error("nurbs_curve_split: u must lie strictly inside the domain", Dm),
+  s: knots_multiplicity(u, C@knots),
+  D: nurbs_curve_insert_knot(C, u, p - s),
+  U: D@knots, P: D@ctrlpts, W: D@weights,
+  k: first(sublist_indices(U, lambda([x], nurbs__zero(x - u)))),
+  [nurbs_curve(p, append(makelist(U[j], j, 1, k + p - 1), [u]),
+               makelist(P[j], j, 1, k - 1), makelist(W[j], j, 1, k - 1)),
+   nurbs_curve(p, append([u], makelist(U[j], j, k, length(U))),
+               makelist(P[j], j, k - 1, length(P)), makelist(W[j], j, k - 1, length(W)))])$
+
+nurbs_curve_reverse(C) := block([U: C@knots, a, b],
+  a: first(U), b: last(U),
+  nurbs_curve(C@degree, reverse(a + b - U), reverse(C@ctrlpts), reverse(C@weights)))$
+
+/* Algorithm A9.1: global interpolation of the points Q by a B-spline of
+   degree p.  method = 'chord (default) | 'centripetal | 'uniform.
+   The banded system is solved by LU factorisation with partial pivoting
+   (linsolve_by_lu); exact data with 'uniform are solved exactly.          */
+nurbs_interpolate_curve(Q, p, [method]) := block(
+  [m: if method = [] then 'chord else first(method), t, U, n, A, span, N, B, X, field, kind],
+  n: length(Q) - 1,
+  if not integerp(p) or p < 1 then error("nurbs_interpolate_curve: the degree must be an integer >= 1"),
+  if n < p then error("nurbs_interpolate_curve: at least p+1 =", p + 1, "points are required; got", n + 1),
+  for k:1 thru n do
+    if nurbs__zero(nurbs__norm(Q[k + 1] - Q[k])) then
+      error("nurbs_interpolate_curve: consecutive points", k, "and", k + 1, "coincide"),
+  kind: nurbs__kind(Q),
+  t: if m = 'centripetal then params_centripetal(Q)
+     elseif m = 'uniform then (if kind = false then params_uniform(Q) else nurbs__num(params_uniform(Q)))
+     elseif m = 'chord then params_chord(Q)
+     else error("nurbs_interpolate_curve: unknown method", m),
+  U: knots_averaging(t, p),
+  A: zeromatrix(n + 1, n + 1),
+  for k:0 thru n do (
+    span: nurbs_find_span(n, p, t[k + 1], U),
+    N: nurbs_basis_funs(span, t[k + 1], p, U),
+    for j:0 thru p do A[k + 1, span - p + j + 1]: N[j + 1]),
+  field: if nurbs__kind(t) = 'bfloat or kind = 'bfloat then 'bigfloatfield
+         elseif nurbs__kind(t) = 'float or kind = 'float then 'floatfield
+         else 'rationalfield,
+  B: apply(matrix, if field = 'floatfield then float(Q)
+                   elseif field = 'bigfloatfield then bfloat(Q) else Q),
+  X: first(linsolve_by_lu(A, B, field)),
+  bspline_curve(p, U, args(X)))$
+
+/* Point inversion / projection (Piegl & Tiller, section 6.1).
+   Newton-Raphson on f(u) = C'(u) . (C(u) - P), started from the closest of
+   a set of samples.  Returns [u, C(u), |C(u) - P|].
+   Options: samples = 20 (per span), maxiter = 50.                          */
+nurbs_curve_project(C, P, [opts]) := block(
+  [ns: nurbs__opt(opts, 'samples, 20), it: nurbs__opt(opts, 'maxiter, 50),
+   Cn, D, a, b, u, best, d, Dv, r, f, fp, un, closed, X],
+  Cn: if nurbs__kind(P) = 'bfloat then nurbs_bfloat(C) else nurbs_float(C),
+  X: nurbs__num(P),
+  D: nurbs__num(nurbs_curve_domain(C)), [a, b]: D,
+  closed: is(nurbs__norm(nurbs_curve_point(Cn, a) - nurbs_curve_point(Cn, b)) <= nurbs_tol),
+  best: inf,
+  for k:0 thru ns * length(knots_domain_spans(C@knots, C@degree)) do block(
+    [uk: a + (b - a) * k / (ns * length(knots_domain_spans(C@knots, C@degree)))],
+    d: nurbs__norm(nurbs_curve_point(Cn, uk) - X),
+    if is(d < best) then (best: d, u: uk)),
+  for k:1 thru it do (
+    Dv: nurbs_curve_derivs(Cn, u, 2), r: Dv[1] - X,
+    if is(nurbs__norm(r) <= nurbs_tol) then return(done),
+    if is(abs(Dv[2] . r) <= nurbs_tol * nurbs__norm(Dv[2]) * nurbs__norm(r)) then return(done),
+    f: Dv[2] . r, fp: Dv[3] . r + Dv[2] . Dv[2],
+    un: u - f / fp,
+    if closed then (if is(un < a) then un: b - (a - un) elseif is(un > b) then un: a + (un - b))
+    else un: max(a, min(b, un)),
+    if is(abs((un - u) * nurbs__norm(Dv[2])) <= nurbs_tol) then (u: un, return(done)),
+    u: un),
+  [u, nurbs_curve_point(Cn, u), nurbs__norm(nurbs_curve_point(Cn, u) - X)])$
+
+/* ==========================================================================
+   STAGE 3.  NURBS SURFACES
+   ========================================================================== */
+
+defstruct(nurbssrf(degree_u, degree_v, knots_u, knots_v, ctrlpts, weights))$
+
+nurbs_surface_p(s) := is(not atom(s) and op(s) = 'nurbssrf)$
+
+/* Constructor:  nurbs_surface(p, q, U, V, P [, W])
+   P = [[P_00, P_01, ...], [P_10, ...], ...]  (rows = u direction)          */
+nurbs_surface(p, q, U, V, P, [W]) := block([nu: length(P), nv: length(first(P)), w],
+  w: if W = [] then makelist(makelist(1, j, 1, nv), i, 1, nu) else first(W),
+  for row in P do if length(row) # nv then error("nurbs_surface: the control net is not rectangular"),
+  if length(w) # nu or length(first(w)) # nv then
+    error("nurbs_surface: the weight and control point arrays have different sizes"),
+  knots_validate(U, p, nu),
+  knots_validate(V, q, nv),
+  for x in flatten(w) do
+    if constantp(x) and not nurbs__negative(-x) then
+      error("nurbs_surface: numeric weights must be positive; got", x),
+  new(nurbssrf(p, q, U, V, P, w)))$
+
+bspline_surface(p, q, U, V, P) := nurbs_surface(p, q, U, V, P)$
+
+nurbs_bezier_surface(P, [W]) := block([p: length(P) - 1, q: length(first(P)) - 1],
+  apply(nurbs_surface, append([p, q, knots_bezier(p), knots_bezier(q), P], W)))$
+
+nurbs_surface_ctrlptsw(S) :=
+  map(lambda([row, wrow], map(nurbs__hom, row, wrow)), S@ctrlpts, S@weights)$
+
+nurbs_surface_domain(S) := block([U: S@knots_u, V: S@knots_v, p: S@degree_u, q: S@degree_v],
+  [[U[p + 1], U[length(U) - p]], [V[q + 1], V[length(V) - q]]])$
+
+/* Algorithm A4.3: surface point S(u,v) */
+nurbs_surface_point(S, u, v) := block(
+  [p: S@degree_u, q: S@degree_v, U: S@knots_u, V: S@knots_v,
+   P: S@ctrlpts, W: S@weights, n, m, us, vs, Nu, Nv, temp, Sw: 0, a, b],
+  n: length(P) - 1, m: length(first(P)) - 1,
+  us: nurbs_find_span(n, p, u, U), Nu: nurbs_basis_funs(us, u, p, U),
+  vs: nurbs_find_span(m, q, v, V), Nv: nurbs_basis_funs(vs, v, q, V),
+  for l:0 thru q do (
+    temp: 0, b: vs - q + l + 1,
+    for k:0 thru p do (a: us - p + k + 1, temp: temp + Nu[k + 1] * nurbs__hom(P[a][b], W[a][b])),
+    Sw: Sw + Nv[l + 1] * temp),
+  nurbs__finish(nurbs__dehom(Sw), [u, v]))$
+
+/* Derivatives of the homogeneous surface (Alg. A3.6), (d+1)x(d+1) matrix */
+nurbs__surface_derivs_w(S, u, v, d) := block(
+  [p: S@degree_u, q: S@degree_v, U: S@knots_u, V: S@knots_v,
+   P: S@ctrlpts, W: S@weights, Pw, n, m, du, dv, us, vs, Nu, Nv, temp, SKL, dd, dim],
+  n: length(P) - 1, m: length(first(P)) - 1, dim: length(P[1][1]) + 1,
+  du: min(d, p), dv: min(d, q),
+  us: nurbs_find_span(n, p, u, U), Nu: nurbs_ders_basis_funs(us, u, p, du, U),
+  vs: nurbs_find_span(m, q, v, V), Nv: nurbs_ders_basis_funs(vs, v, q, dv, V),
+  /* only the local (p+1)x(q+1) sub-net, in homogeneous coordinates */
+  Pw: makelist(makelist(nurbs__hom(P[us - p + r + 1][vs - q + s + 1], W[us - p + r + 1][vs - q + s + 1]),
+                        s, 0, q), r, 0, p),
+  SKL: genmatrix(lambda([i, j], nurbs__zerovec(dim)), d + 1, d + 1),
+  for k:0 thru du do (
+    temp: makelist(0, s, 0, q),
+    for s:0 thru q do
+      for r:0 thru p do
+        temp[s + 1]: temp[s + 1] + Nu[k + 1, r + 1] * Pw[r + 1][s + 1],
+    dd: min(d - k, dv),
+    for l:0 thru dd do (
+      SKL[k + 1, l + 1]: nurbs__zerovec(dim),
+      for s:0 thru q do SKL[k + 1, l + 1]: SKL[k + 1, l + 1] + Nv[l + 1, s + 1] * temp[s + 1])),
+  SKL)$
+
+/* Algorithm A4.4: partial derivatives of the rational surface.
+   Returns a matrix SKL with SKL[k+1, l+1] = d^(k+l) S / du^k dv^l, k+l <= d. */
+nurbs_surface_derivs(S, u, v, d) := block([SKLw, A, w, SKL, val, v2, dim],
+  SKLw: nurbs__surface_derivs_w(S, u, v, d),
+  dim: length(SKLw[1, 1]) - 1,
+  A: genmatrix(lambda([i, j], rest(SKLw[i, j], -1)), d + 1, d + 1),
+  w: genmatrix(lambda([i, j], last(SKLw[i, j])), d + 1, d + 1),
+  SKL: genmatrix(lambda([i, j], nurbs__zerovec(dim)), d + 1, d + 1),
+  for k:0 thru d do
+    for l:0 thru d - k do (
+      val: A[k + 1, l + 1],
+      for j:1 thru l do val: val - binomial(l, j) * w[1, j + 1] * SKL[k + 1, l - j + 1],
+      for i:1 thru k do (
+        val: val - binomial(k, i) * w[i + 1, 1] * SKL[k - i + 1, l + 1],
+        v2: 0,
+        for j:1 thru l do v2: v2 + binomial(l, j) * w[i + 1, j + 1] * SKL[k - i + 1, l - j + 1],
+        val: val - binomial(k, i) * v2),
+      SKL[k + 1, l + 1]: val / w[1, 1]),
+  nurbs__finish(SKL, [u, v]))$
+
+nurbs_surface_tangents(S, u, v) := block([D: nurbs_surface_derivs(S, u, v, 1)],
+  [D[2, 1], D[1, 2]])$
+
+/* Unit normal  N = S_u x S_v / |S_u x S_v|  (und at a singular point) */
+nurbs_surface_normal(S, u, v) := block([T: nurbs_surface_tangents(S, u, v)],
+  nurbs__unit(nurbs__cross(T[1], T[2])))$
+
+/* Exact rational expression of the surface on patch (i, j) */
+nurbs_surface_span_expr(S, i, j, s, t) := block(
+  [p: S@degree_u, q: S@degree_v, Pw: nurbs_surface_ctrlptsw(S), Nu, Nv, Sw: 0, algebraic: true],
+  nurbs__check_span(i, p, S@knots_u), nurbs__check_span(j, q, S@knots_v),
+  Nu: nurbs_basis_funs(i, s, p, S@knots_u),
+  Nv: nurbs_basis_funs(j, t, q, S@knots_v),
+  for k:0 thru p do
+    for l:0 thru q do Sw: Sw + Nu[k + 1] * Nv[l + 1] * Pw[i - p + k + 1][j - q + l + 1],
+  map(ratsimp, nurbs__dehom(Sw)))$
+
+/* Grid of (nu+1) x (nv+1) points uniformly spaced in the parameters */
+nurbs_surface_grid(S, nu, nv) := block([D: nurbs_surface_domain(S), Sf: nurbs_float(S), a, b, c, d],
+  [a, b]: float(D[1]), [c, d]: float(D[2]),
+  makelist(makelist(nurbs_surface_point(Sf, a + (b - a) * i / nu, c + (d - c) * j / nv),
+                    j, 0, nv), i, 0, nu))$
+
+/* Triangle mesh: [vertices, triangles (1-based indices), unit normals] */
+nurbs_surface_mesh(S, nu, nv) := block(
+  [D: nurbs_surface_domain(S), Sf: nurbs_float(S), a, b, c, d, V: [], NN: [], T: [],
+   u, v, id, Dv, nrm],
+  [a, b]: float(D[1]), [c, d]: float(D[2]),
+  for i:0 thru nu do
+    for j:0 thru nv do (
+      u: a + (b - a) * i / nu, v: c + (d - c) * j / nv,
+      Dv: nurbs_surface_derivs(Sf, u, v, 1),
+      V: endcons(Dv[1, 1], V),
+      nrm: nurbs__unit(nurbs__cross(Dv[2, 1], Dv[1, 2])),
+      NN: endcons(if nrm = und then [0.0, 0.0, 0.0] else nrm, NN)),
+  for i:0 thru nu - 1 do
+    for j:0 thru nv - 1 do (
+      T: endcons([nurbs__grid_id(i, j, nv, 1), nurbs__grid_id(i + 1, j, nv, 1), nurbs__grid_id(i + 1, j + 1, nv, 1)], T),
+      T: endcons([nurbs__grid_id(i, j, nv, 1), nurbs__grid_id(i + 1, j + 1, nv, 1), nurbs__grid_id(i, j + 1, nv, 1)], T)),
+  [V, T, NN])$
+
+/* Isoparametric curve: dir = 'u (u fixed = val, curve in v) or 'v */
+nurbs_surface_isocurve(S, dir, val) := block(
+  [Pw: nurbs_surface_ctrlptsw(S), p: S@degree_u, q: S@degree_v, sp, N, Qw],
+  if dir = 'u then (
+    sp: nurbs_find_span(length(Pw) - 1, p, val, S@knots_u),
+    N: nurbs_basis_funs(sp, val, p, S@knots_u),
+    Qw: makelist(sum(N[k + 1] * Pw[sp - p + k + 1][j], k, 0, p), j, 1, length(first(Pw))),
+    nurbs__curve_from_w(q, S@knots_v, Qw))
+  elseif dir = 'v then (
+    sp: nurbs_find_span(length(first(Pw)) - 1, q, val, S@knots_v),
+    N: nurbs_basis_funs(sp, val, q, S@knots_v),
+    Qw: makelist(sum(N[l + 1] * Pw[i][sp - q + l + 1], l, 0, q), i, 1, length(Pw)),
+    nurbs__curve_from_w(p, S@knots_u, Qw))
+  else error("nurbs_surface_isocurve: dir must be 'u or 'v"))$
+
+/* ---- Modelling operations along one parametric direction ----------------
+   A surface is a family of curves: in direction 'u each column j
+   (P_{0j}, ..., P_{nj}) is a curve of degree p on U.  Applying the same
+   curve algorithm to every column (or row, for 'v) gives the surface
+   version: A5.3 (knot insertion), A5.5 (refinement), A5.10 (degree
+   elevation), A5.7 (Bezier decomposition).                                 */
+nurbs__surface_apply(S, dir, f) := block([P: S@ctrlpts, W: S@weights, cs, nP, nW],
+  if dir = 'u then (
+    cs: makelist(apply(f, [nurbs_curve(S@degree_u, S@knots_u,
+                               makelist(P[i][j], i, 1, length(P)), makelist(W[i][j], i, 1, length(P)))]),
+                 j, 1, length(first(P))),
+    nP: makelist(makelist(cs[j]@ctrlpts[i], j, 1, length(cs)), i, 1, length(first(cs)@ctrlpts)),
+    nW: makelist(makelist(cs[j]@weights[i], j, 1, length(cs)), i, 1, length(first(cs)@ctrlpts)),
+    nurbs_surface(first(cs)@degree, S@degree_v, first(cs)@knots, S@knots_v, nP, nW))
+  elseif dir = 'v then (
+    cs: makelist(apply(f, [nurbs_curve(S@degree_v, S@knots_v, P[i], W[i])]), i, 1, length(P)),
+    nurbs_surface(S@degree_u, first(cs)@degree, S@knots_u, first(cs)@knots,
+                  map(lambda([c], c@ctrlpts), cs), map(lambda([c], c@weights), cs)))
+  else error("dir must be 'u or 'v"))$
+
+nurbs_surface_insert_knot(S, dir, val, r) :=
+  nurbs__surface_apply(S, dir, lambda([c], nurbs_curve_insert_knot(c, val, r)))$
+
+nurbs_surface_refine(S, dir, X) :=
+  nurbs__surface_apply(S, dir, lambda([c], nurbs_curve_refine(c, X)))$
+
+nurbs_surface_elevate_degree(S, dir, t) :=
+  nurbs__surface_apply(S, dir, lambda([c], nurbs_curve_elevate_degree(c, t)))$
+
+/* Bezier decomposition of a surface: a list of rows of Bezier patches
+   (each patch keeps its parameter rectangle).                             */
+nurbs_surface_decompose(S) := block([R, p: S@degree_u, q: S@degree_v, su, sv, P, W],
+  R: nurbs_surface_refine(nurbs_surface_refine(S, 'u, nurbs__bezier_knots(S@knots_u, p)),
+                          'v, nurbs__bezier_knots(S@knots_v, q)),
+  su: knots_domain_spans(R@knots_u, p), sv: knots_domain_spans(R@knots_v, q),
+  P: R@ctrlpts, W: R@weights,
+  makelist(makelist(block([a: (i - 1) * p, b: (j - 1) * q],
+      nurbs_surface(p, q,
+        append(makelist(su[i][2], k, 0, p), makelist(su[i][3], k, 0, p)),
+        append(makelist(sv[j][2], k, 0, q), makelist(sv[j][3], k, 0, q)),
+        makelist(makelist(P[a + k + 1][b + l + 1], l, 0, q), k, 0, p),
+        makelist(makelist(W[a + k + 1][b + l + 1], l, 0, q), k, 0, p))),
+    j, 1, length(sv)), i, 1, length(su)))$
+
+/* Point inversion on a surface (Piegl & Tiller, eq. 6.6): Newton-Raphson
+   for S_u.(S-P) = 0, S_v.(S-P) = 0.  Returns [u, v, S(u,v), distance].   */
+nurbs_surface_project(S, P, [opts]) := block(
+  [ns: nurbs__opt(opts, 'samples, 20), it: nurbs__opt(opts, 'maxiter, 50),
+   Sn, X, D, a, b, c, d, u, v, best: inf, dd, Dv, r, Su, Sv, J, kap, det, du, dv],
+  Sn: if nurbs__kind(P) = 'bfloat then nurbs_bfloat(S) else nurbs_float(S),
+  X: nurbs__num(P),
+  D: nurbs__num(nurbs_surface_domain(S)), [a, b]: D[1], [c, d]: D[2],
+  for i:0 thru ns do for j:0 thru ns do block([ui: a + (b - a) * i / ns, vj: c + (d - c) * j / ns],
+    dd: nurbs__norm(nurbs_surface_point(Sn, ui, vj) - X),
+    if is(dd < best) then (best: dd, u: ui, v: vj)),
+  for k:1 thru it do (
+    Dv: nurbs_surface_derivs(Sn, u, v, 2), r: Dv[1, 1] - X, Su: Dv[2, 1], Sv: Dv[1, 2],
+    if is(nurbs__norm(r) <= nurbs_tol) then return(done),
+    if is(abs(Su . r) <= nurbs_tol * nurbs__norm(Su) * nurbs__norm(r) and
+          abs(Sv . r) <= nurbs_tol * nurbs__norm(Sv) * nurbs__norm(r)) then return(done),
+    J: [[Su . Su + r . Dv[3, 1], Su . Sv + r . Dv[2, 2]],
+        [Su . Sv + r . Dv[2, 2], Sv . Sv + r . Dv[1, 3]]],
+    kap: [-(r . Su), -(r . Sv)],
+    det: J[1][1] * J[2][2] - J[1][2] * J[2][1],
+    if is(abs(det) <= nurbs_tol^2) then return(done),
+    du: (kap[1] * J[2][2] - kap[2] * J[1][2]) / det,
+    dv: (J[1][1] * kap[2] - J[2][1] * kap[1]) / det,
+    u: max(a, min(b, u + du)), v: max(c, min(d, v + dv)),
+    if is(nurbs__norm(du * Su + dv * Sv) <= nurbs_tol) then return(done)),
+  [u, v, nurbs_surface_point(Sn, u, v), nurbs__norm(nurbs_surface_point(Sn, u, v) - X)])$
+
+/* ---- Surface constructors ------------------------------------------------ */
+
+nurbs_bilinear(P00, P10, P01, P11) :=
+  nurbs_surface(1, 1, [0, 0, 1, 1], [0, 0, 1, 1], [[P00, P01], [P10, P11]])$
+
+/* Extrusion of curve C along vector d */
+nurbs_extrude(C, d) := block([P: map(nurbs__pad3, C@ctrlpts)],
+  nurbs_surface(C@degree, 1, C@knots, [0, 0, 1, 1],
+    map(lambda([X], [X, X + d]), P),
+    map(lambda([w], [w, w]), C@weights)))$
+
+/* Ruled surface between two compatible curves (same degree and knots) */
+nurbs_ruled(C1, C2) := block(
+  if C1@degree # C2@degree or C1@knots # C2@knots then
+    error("nurbs_ruled: both curves must have the same degree and knot vector"),
+  nurbs_surface(C1@degree, 1, C1@knots, [0, 0, 1, 1],
+    map(lambda([A, B], [nurbs__pad3(A), nurbs__pad3(B)]), C1@ctrlpts, C2@ctrlpts),
+    map(lambda([a, b], [a, b]), C1@weights, C2@weights)))$
+
+/* Surface of revolution (360 degrees) of profile C about the z axis.
+   u = rotation (exact quadratic rational circle), v = profile.            */
+nurbs_revolve(C) := block([s: sqrt(2)/2, rot, prof: map(nurbs__pad3, C@ctrlpts), P, W],
+  rot(X, k) := block([x: X[1], y: X[2], z: X[3]],
+    if mod(k, 4) = 0 then [x, y, z] elseif mod(k, 4) = 1 then [-y, x, z]
+    elseif mod(k, 4) = 2 then [-x, -y, z] else [y, -x, z]),
+  P: makelist(
+       makelist(
+         if evenp(i) then rot(prof[j], i / 2)
+         else block([A: rot(prof[j], (i - 1) / 2), B: rot(prof[j], (i + 1) / 2)],
+                    [A[1] + B[1], A[2] + B[2], A[3]]),
+         j, 1, length(prof)),
+       i, 0, 8),
+  W: makelist(makelist((if evenp(i) then 1 else s) * C@weights[j], j, 1, length(prof)), i, 0, 8),
+  nurbs_surface(2, C@degree, [0, 0, 0, 1/4, 1/4, 1/2, 1/2, 3/4, 3/4, 1, 1, 1], C@knots, P, W))$
+
+nurbs_torus(R, r) := nurbs_revolve(nurbs_circle_3d([R, 0, 0], r, [1, 0, 0], [0, 0, 1]))$
+
+nurbs_sphere(r) := block([s: sqrt(2)/2],
+  nurbs_revolve(nurbs_curve(2, [0, 0, 0, 1/2, 1/2, 1, 1, 1],
+    [[0, 0, -r], [r, 0, -r], [r, 0, 0], [r, 0, r], [0, 0, r]], [1, s, 1, s, 1])))$
+
+nurbs_cylinder(r, h) := nurbs_revolve(nurbs_line([r, 0, 0], [r, 0, h]))$
+
+/* Copies of an object with all data in double floats / bigfloats */
+nurbs__convert(obj, f) :=
+  if nurbs_curve_p(obj) then
+    new(nurbscrv(obj@degree, apply(f, [obj@knots]), apply(f, [obj@ctrlpts]), apply(f, [obj@weights])))
+  elseif nurbs_surface_p(obj) then
+    new(nurbssrf(obj@degree_u, obj@degree_v, apply(f, [obj@knots_u]), apply(f, [obj@knots_v]),
+                 apply(f, [obj@ctrlpts]), apply(f, [obj@weights])))
+  else apply(f, [obj])$
+
+nurbs_float(obj)  := nurbs__convert(obj, 'float)$
+nurbs_bfloat(obj) := nurbs__convert(obj, 'bfloat)$
+
+/* ==========================================================================
+   STAGE 4.  DIFFERENTIAL GEOMETRY
+   ========================================================================== */
+
+/* ---- Curves --------------------------------------------------------------- */
+
+/* Curvature  k = |C' x C''| / |C'|^3 */
+nurbs_curve_curvature(C, u) := block([D: nurbs_curve_derivs(C, u, 2)],
+  nurbs__finish(nurbs__norm(nurbs__cross(D[2], D[3])) / nurbs__norm(D[2])^3, u))$
+
+/* Torsion  tau = (C' x C'') . C''' / |C' x C''|^2  (0 for planar curves) */
+nurbs_curve_torsion(C, u) := block([D: nurbs_curve_derivs(C, u, 3), c],
+  c: nurbs__cross(D[2], D[3]),
+  if nurbs__zero(c . c) then 0
+  else nurbs__finish((c . nurbs__pad3(D[4])) / (c . c), u))$
+
+/* Frenet frame [T, N, B] */
+nurbs_curve_frenet(C, u) := block([D: nurbs_curve_derivs(C, u, 2), T, B, N],
+  T: nurbs__unit(nurbs__pad3(D[2])),
+  B: nurbs__unit(nurbs__cross(D[2], D[3])),
+  N: if B = und then und else nurbs__cross(B, T),
+  [T, N, B])$
+
+/* Arc length (5-point Gauss-Legendre, nsub sub-intervals per span) */
+nurbs_curve_length(C, [nsub]) := block([ns: if nsub = [] then 8 else first(nsub),
+   Cf: nurbs_float(C), L: 0.0, a, b, h, m],
+  for s in knots_domain_spans(Cf@knots, Cf@degree) do
+    for k:0 thru ns - 1 do (
+      a: s[2] + (s[3] - s[2]) * k / ns, b: s[2] + (s[3] - s[2]) * (k + 1) / ns,
+      h: (b - a) / 2, m: (a + b) / 2,
+      for g in nurbs__gauss5 do
+        L: L + h * g[2] * nurbs__norm(nurbs_curve_derivs(Cf, m + h * g[1], 1)[2])),
+  L)$
+
+/* Bounding box of the control points (contains the object: convex hull) */
+nurbs_bounding_box(obj) := block([P: if nurbs_curve_p(obj) then obj@ctrlpts
+                                     else apply(append, obj@ctrlpts), d],
+  d: length(first(P)),
+  [makelist(lmin(map(lambda([X], X[k]), P)), k, 1, d),
+   makelist(lmax(map(lambda([X], X[k]), P)), k, 1, d)])$
+
+/* ---- Surfaces: one shared evaluation of every local quantity ----------- */
+
+/* Local differential geometry at (u,v), computed from ONE call to
+   nurbs_surface_derivs(S,u,v,2).  Returns the list
+     [point, Su, Sv, n, [E,F,G], [L,M,N], K, H, [k1,k2], singular]
+   where n is the unit normal Su x Sv / |Su x Sv| and k1 >= k2.
+   At a singular point (|Su x Sv| <= nurbs_tol |Su||Sv|) n, the second form,
+   K, H and the principal curvatures are und and singular = true.
+   All public curvature functions are thin wrappers around this helper.   */
+nurbs_surface_geometry(S, u, v) := block(
+  [D: nurbs_surface_derivs(S, u, v, 2), Su, Sv, Nv, nn, n, E, F, G, L, M, N, W2, K, H, disc, sing],
+  Su: D[2, 1], Sv: D[1, 2],
+  Nv: nurbs__cross(Su, Sv), nn: nurbs__norm(Nv),
+  sing: if nurbs__has_float([u, v]) then
+          is(nn <= nurbs_tol * max(1, nurbs__norm(Su) * nurbs__norm(Sv)))
+        else nurbs__zero(Nv . Nv),
+  if sing then return([D[1, 1], Su, Sv, und, [Su . Su, Su . Sv, Sv . Sv], und, und, und, und, true]),
+  n: Nv / nn,
+  E: Su . Su, F: Su . Sv, G: Sv . Sv,
+  L: D[3, 1] . n, M: D[2, 2] . n, N: D[1, 3] . n,
+  W2: E * G - F^2,
+  K: (L * N - M^2) / W2,
+  H: (E * N - 2 * F * M + G * L) / (2 * W2),
+  disc: H^2 - K,
+  if nurbs__has_float([u, v]) then disc: max(0, disc),
+  nurbs__finish([D[1, 1], Su, Sv, n, [E, F, G], [L, M, N], K, H,
+                 [H + sqrt(disc), H - sqrt(disc)], false], [u, v]))$
+
+/* [[E, F, G], [L, M, N], n] or und at a singular point */
+nurbs_fundamental_forms(S, u, v) := block([g: nurbs_surface_geometry(S, u, v)],
+  if g[10] then und else [g[5], g[6], g[4]])$
+
+/* Gaussian curvature  K = (LN - M^2) / (EG - F^2) */
+nurbs_gaussian_curvature(S, u, v) := nurbs_surface_geometry(S, u, v)[7]$
+
+/* Mean curvature  H = (EN - 2FM + GL) / (2 (EG - F^2)).
+   The sign follows n = Su x Sv / |Su x Sv|.  With the outward normal (the
+   case of nurbs_sphere and nurbs_torus) a convex surface has H < 0: the
+   unit sphere gives K = 1, H = -1.                                         */
+nurbs_mean_curvature(S, u, v) := nurbs_surface_geometry(S, u, v)[8]$
+
+/* Principal curvatures [k1, k2], k1 >= k2 */
+nurbs_principal_curvatures(S, u, v) := nurbs_surface_geometry(S, u, v)[9]$
+
+/* Principal directions (unit vectors in R^3) [d1, d2]; und at an umbilic */
+nurbs__is_umbilic(H, K) := block([d: H^2 - K],
+  if nurbs__has_float(d) then is(abs(d) <= nurbs_tol * max(1, H^2)) else nurbs__zero(d))$
+
+nurbs_principal_directions(S, u, v) := block([g: nurbs_surface_geometry(S, u, v),
+   E, F, G, L, M, N, a, b, dirs: []],
+  if g[10] then return(und),
+  if nurbs__is_umbilic(g[8], g[7]) then return(und),
+  [E, F, G]: g[5], [L, M, N]: g[6],
+  for k in g[9] do (
+    [a, b]: [M - k * F, -(L - k * E)],
+    if nurbs__zero(a) and nurbs__zero(b) then [a, b]: [N - k * G, -(M - k * F)],
+    dirs: endcons(nurbs__unit(a * g[2] + b * g[3]), dirs)),
+  nurbs__finish(dirs, [u, v]))$
+
+/* Is (u,v) a singular point (Su x Sv = 0, relative tolerance)? */
+nurbs_is_singular(S, u, v, [tol]) := block([t: if tol = [] then nurbs_tol else first(tol), T, c],
+  T: nurbs_surface_tangents(S, u, v),
+  if not nurbs__has_float([u, v]) and tol = [] then return(nurbs__zero(nurbs__norm(nurbs__cross(T[1], T[2])))),
+  T: nurbs__num(T),
+  c: nurbs__norm(nurbs__cross(T[1], T[2])),
+  is(c <= t * max(1, nurbs__norm(T[1]) * nurbs__norm(T[2]))))$
+
+/* Searches a (nu+1)x(nv+1) parameter grid for singular points.
+   Returns [[u, v, S(u,v)], ...]                                           */
+nurbs_singular_points(S, nu, nv, [tol]) := block([D: nurbs_surface_domain(S), Sf: nurbs_float(S),
+   r: [], a, b, c, d, u, v],
+  [a, b]: float(D[1]), [c, d]: float(D[2]),
+  for i:0 thru nu do
+    for j:0 thru nv do (
+      u: a + (b - a) * i / nu, v: c + (d - c) * j / nv,
+      if apply(nurbs_is_singular, append([Sf, u, v], tol)) then
+        r: endcons([u, v, nurbs_surface_point(Sf, u, v)], r)),
+  r)$
+
+/* Local classification:
+   singular | planar | umbilic | elliptic | hyperbolic | parabolic          */
+nurbs_classify_point(S, u, v, [tol]) := block(
+  [nurbs_tol: if tol = [] then nurbs_tol else first(tol), g, K, H],
+  g: nurbs_surface_geometry(S, u, v),
+  if g[10] then return('singular),
+  K: nurbs__num(g[7]), H: nurbs__num(g[8]),
+  if abs(K) <= nurbs_tol and abs(H) <= nurbs_tol then 'planar
+  elseif nurbs__is_umbilic(H, K) then 'umbilic
+  elseif K > nurbs_tol then 'elliptic
+  elseif K < -nurbs_tol then 'hyperbolic
+  else 'parabolic)$
+
+/* Exact expressions [K, H] on patch (i,j) as functions of s, t.  Works
+   with symbolic weights.  Avoids the square root in K by using the
+   unnormalised normal.                                                     */
+nurbs_curvature_sym(S, i, j, s, t) := block([X, Xs, Xt, nn, E, F, G, L, M, N, W2],
+  X: nurbs_surface_span_expr(S, i, j, s, t),
+  Xs: diff(X, s), Xt: diff(X, t),
+  nn: nurbs__cross(Xs, Xt),
+  E: ratsimp(Xs . Xs), F: ratsimp(Xs . Xt), G: ratsimp(Xt . Xt),
+  W2: ratsimp(E * G - F^2),                  /* = |nn|^2 */
+  L: ratsimp(diff(Xs, s) . nn), M: ratsimp(diff(Xs, t) . nn), N: ratsimp(diff(Xt, t) . nn),
+  [ratsimp((L * N - M^2) / W2^2),
+   ratsimp((E * N - 2 * F * M + G * L) / (2 * W2)) / sqrt(W2)])$
+
+/* Gauss quadrature over the surface domain of f(S, u, v) */
+nurbs__surface_integral(S, f, ns) := block([Sf: nurbs_float(S), I: 0.0, su, sv,
+   a, b, c, d, hu, hv, mu, mv],
+  su: knots_domain_spans(Sf@knots_u, S@degree_u),
+  sv: knots_domain_spans(Sf@knots_v, S@degree_v),
+  for A in su do for B in sv do
+    for ki:0 thru ns - 1 do for kj:0 thru ns - 1 do (
+      a: A[2] + (A[3] - A[2]) * ki / ns, b: A[2] + (A[3] - A[2]) * (ki + 1) / ns,
+      c: B[2] + (B[3] - B[2]) * kj / ns, d: B[2] + (B[3] - B[2]) * (kj + 1) / ns,
+      hu: (b - a) / 2, mu: (a + b) / 2, hv: (d - c) / 2, mv: (c + d) / 2,
+      for g1 in nurbs__gauss5 do for g2 in nurbs__gauss5 do
+        I: I + hu * hv * g1[2] * g2[2] * apply(f, [Sf, mu + hu * g1[1], mv + hv * g2[1]])),
+  I)$
+
+nurbs_surface_area(S, [nsub]) := nurbs__surface_integral(S,
+  lambda([X, u, v], block([T: nurbs_surface_tangents(X, u, v)],
+    nurbs__norm(nurbs__cross(T[1], T[2])))),
+  if nsub = [] then 4 else first(nsub))$
+
+/* Total Gaussian curvature  \int\int K dA  (Gauss-Bonnet: 2 pi chi for a
+   closed surface)                                                         */
+nurbs_total_gaussian_curvature(S, [nsub]) := nurbs__surface_integral(S,
+  lambda([X, u, v], block([g: nurbs_surface_geometry(X, u, v)],
+    if g[10] then 0.0 else g[7] * sqrt(g[5][1] * g[5][3] - g[5][2]^2))),
+  if nsub = [] then 4 else first(nsub))$
+
+/* Enclosed volume of a closed surface:  V = |1/3 \int\int S . (Su x Sv) du dv| */
+nurbs_surface_volume(S, [nsub]) := abs(nurbs__surface_integral(S,
+  lambda([X, u, v], block([D: nurbs_surface_derivs(X, u, v, 1)],
+    D[1, 1] . nurbs__cross(D[2, 1], D[1, 2]) / 3)),
+  if nsub = [] then 4 else first(nsub)))$
+
+/* ==========================================================================
+   STAGE 5.  VISUALISATION AND EXPORT
+   ========================================================================== */
+
+nurbs_curve_samples(C, n) := block([Cf: nurbs_float(C), D: float(nurbs_curve_domain(C))],
+  makelist(nurbs_curve_point(Cf, D[1] + (D[2] - D[1]) * k / n), k, 0, n))$
+
+nurbs__wx() :=
+  if nurbs_inline = auto then is(?fboundp('wxdraw2d) # false or ?boundp('wxplot_size) # false)
+  else is(nurbs_inline = true)$
+
+nurbs__own_opts : '[samples, control, control_color, curve_color, nu, nv, normals,
+                    normal_length, surface_color, net_color]$
+
+/* draw objects for a curve.  Options:
+     samples=100, control=true, curve_color=blue, control_color=red      */
+nurbs_draw_curve(C, [opts]) := block(
+  [n: nurbs__opt(opts, 'samples, 100), ctrl: nurbs__opt(opts, 'control, true),
+   cc: nurbs__opt(opts, 'curve_color, blue), pc: nurbs__opt(opts, 'control_color, red),
+   extra: nurbs__drop_opts(opts, nurbs__own_opts), objs],
+  objs: append(extra,
+    [color = cc, line_width = 2, points_joined = true, point_type = none,
+     points(nurbs_curve_samples(C, n))]),
+  if ctrl then objs: append(objs,
+    [color = pc, line_width = 1, points_joined = true,
+     point_type = filled_circle, point_size = 1, points(float(C@ctrlpts))]),
+  objs)$
+
+/* draw objects for a surface.  Options:
+     nu=30, nv=30, control=false, net_color=red, normals=false|n,
+     normal_length=0.3, surface_color=<colour> (default: height palette)  */
+nurbs_draw_surface(S, [opts]) := block(
+  [nu: nurbs__opt(opts, 'nu, 30), nv: nurbs__opt(opts, 'nv, 30),
+   ctrl: nurbs__opt(opts, 'control, false), nrm: nurbs__opt(opts, 'normals, false),
+   nl: nurbs__opt(opts, 'normal_length, 0.3), sc: nurbs__opt(opts, 'surface_color, false),
+   pc: nurbs__opt(opts, 'net_color, red),
+   extra: nurbs__drop_opts(opts, nurbs__own_opts), grid, objs, P, Sf, D, u, v, k],
+  grid: nurbs_surface_grid(S, nu, nv),
+  objs: append([surface_hide = true],
+               if sc = false then [enhanced3d = true, palette = color] else [enhanced3d = false, color = sc],
+               extra, [apply(mesh, grid)]),
+  if ctrl then (
+    P: float(S@ctrlpts),
+    objs: append(objs, [enhanced3d = false, color = pc, line_width = 1, points_joined = true,
+                        point_type = filled_circle, point_size = 0.7],
+      map(points, P), map(points, args(transpose(apply(matrix, P)))))),
+  if nrm # false then (
+    k: if integerp(nrm) then nrm else 8,
+    Sf: nurbs_float(S), D: float(nurbs_surface_domain(S)),
+    objs: append(objs, [enhanced3d = false, color = black, head_length = 0.05]),
+    for i:0 thru k do
+      for j:0 thru k do (
+        u: D[1][1] + (D[1][2] - D[1][1]) * i / k,
+        v: D[2][1] + (D[2][2] - D[2][1]) * j / k,
+        block([X: nurbs_surface_point(Sf, u, v), N: nurbs_surface_normal(Sf, u, v)],
+          if N # und then objs: endcons(vector(X, nl * N), objs)))),
+  objs)$
+
+nurbs__draw_objects(obj, opts) := block([objs: [], is3d: false],
+  for o in (if listp(obj) then obj else [obj]) do
+    if nurbs_surface_p(o) then (is3d: true, objs: append(objs, apply(nurbs_draw_surface, cons(o, opts))))
+    elseif nurbs_curve_p(o) then (
+      if length(first(o@ctrlpts)) = 3 then is3d: true,
+      objs: append(objs, apply(nurbs_draw_curve, cons(o, opts))))
+    else error("nurbs_plot: not a NURBS curve or surface:", o),
+  [is3d, objs])$
+
+/* Plot a curve, a surface or a list of them (inline inside wxMaxima) */
+nurbs_plot(obj, [opts]) := block([r: nurbs__draw_objects(obj, opts), gopts],
+  gopts: if r[1] then [xlabel = "x", ylabel = "y", zlabel = "z", proportional_axes = xyz]
+         else [xlabel = "x", ylabel = "y", proportional_axes = xy],
+  if nurbs__wx() then apply(if r[1] then 'wxdraw3d else 'wxdraw2d, append(gopts, r[2]))
+  else apply(if r[1] then 'draw3d else 'draw2d, append(gopts, r[2])))$
+
+/* Export the plot to an image file; format from the extension:
+   png, svg, pdf, eps, jpg.                                                */
+nurbs_export_plot(obj, filename, [opts]) := block([ext, base, term, r, pos: 0],
+  for i:1 thru slength(filename) do if charat(filename, i) = "." then pos: i,
+  if pos = 0 then error("nurbs_export_plot: the file name needs an extension"),
+  ext: sdowncase(substring(filename, pos + 1)), base: substring(filename, 1, pos),
+  term: if ext = "png" then 'pngcairo elseif ext = "svg" then 'svg elseif ext = "pdf" then 'pdfcairo
+        elseif ext = "eps" then 'eps elseif ext = "jpg" or ext = "jpeg" then 'jpg
+        else error("nurbs_export_plot: unsupported format:", ext),
+  r: nurbs__draw_objects(obj, opts),
+  draw(apply(if r[1] then 'gr3d else 'gr2d,
+             append(if r[1] then [proportional_axes = xyz] else [proportional_axes = xy], r[2])),
+       terminal = term, file_name = base),
+  filename)$
+
+/* Curve samples to CSV:  u, x, y [, z] */
+nurbs_export_curve_csv(C, filename, n) := block([Cf: nurbs_float(C), D: float(nurbs_curve_domain(C)), s, u],
+  s: openw(filename),
+  printf(s, if length(first(C@ctrlpts)) = 2 then "u,x,y~%" else "u,x,y,z~%"),
+  for k:0 thru n do (
+    u: D[1] + (D[2] - D[1]) * k / n,
+    printf(s, "~,12e~{,~,12e~}~%", u, nurbs_curve_point(Cf, u))),
+  close(s), filename)$
+
+/* Triangle mesh to Wavefront OBJ (with normals) */
+nurbs_export_obj(S, filename, nu, nv) := block([M: nurbs_surface_mesh(S, nu, nv), s],
+  s: openw(filename),
+  printf(s, "# NURBS-Maxima ~a~%", nurbs_version),
+  for X in M[1] do printf(s, "v ~,10f ~,10f ~,10f~%", X[1], X[2], X[3]),
+  for N in M[3] do printf(s, "vn ~,10f ~,10f ~,10f~%", N[1], N[2], N[3]),
+  for T in M[2] do printf(s, "f ~d//~d ~d//~d ~d//~d~%", T[1], T[1], T[2], T[2], T[3], T[3]),
+  close(s), filename)$
+
+/* Triangle mesh to ASCII STL */
+nurbs_export_stl(S, filename, nu, nv) := block([M: nurbs_surface_mesh(S, nu, nv), s, A, B, C, n],
+  s: openw(filename),
+  printf(s, "solid nurbs_maxima~%"),
+  for T in M[2] do (
+    [A, B, C]: [M[1][T[1]], M[1][T[2]], M[1][T[3]]],
+    n: nurbs__unit(nurbs__cross(B - A, C - A)),
+    if n = und then n: [0.0, 0.0, 0.0],
+    printf(s, "  facet normal ~,8e ~,8e ~,8e~%    outer loop~%", n[1], n[2], n[3]),
+    for X in [A, B, C] do printf(s, "      vertex ~,8e ~,8e ~,8e~%", X[1], X[2], X[3]),
+    printf(s, "    endloop~%  endfacet~%")),
+  printf(s, "endsolid nurbs_maxima~%"),
+  close(s), filename)$
+
+/* Mesh to legacy VTK (POLYDATA) with point fields gaussian_curvature,
+   mean_curvature and normals (for ParaView / VisIt).  Every vertex is
+   evaluated once with nurbs_surface_geometry.                             */
+nurbs_export_vtk(S, filename, nu, nv) := block([Sf: nurbs_float(S), D: float(nurbs_surface_domain(S)),
+   V: [], NN: [], Ks: [], Hs: [], T: [], g, s, u, v, id],
+  for i:0 thru nu do for j:0 thru nv do (
+    u: D[1][1] + (D[1][2] - D[1][1]) * i / nu, v: D[2][1] + (D[2][2] - D[2][1]) * j / nv,
+    g: nurbs_surface_geometry(Sf, u, v),
+    V: endcons(g[1], V),
+    NN: endcons(if g[10] then [0.0, 0.0, 0.0] else g[4], NN),
+    Ks: endcons(if g[10] then 0.0 else g[7], Ks),
+    Hs: endcons(if g[10] then 0.0 else g[8], Hs)),
+  for i:0 thru nu - 1 do for j:0 thru nv - 1 do
+    T: append(T, [[nurbs__grid_id(i, j, nv, 0), nurbs__grid_id(i + 1, j, nv, 0), nurbs__grid_id(i + 1, j + 1, nv, 0)],
+                  [nurbs__grid_id(i, j, nv, 0), nurbs__grid_id(i + 1, j + 1, nv, 0), nurbs__grid_id(i, j + 1, nv, 0)]]),
+  s: openw(filename),
+  printf(s, "# vtk DataFile Version 3.0~%NURBS-Maxima ~a~%ASCII~%DATASET POLYDATA~%", nurbs_version),
+  printf(s, "POINTS ~d double~%", length(V)),
+  for X in V do printf(s, "~,10e ~,10e ~,10e~%", X[1], X[2], X[3]),
+  printf(s, "POLYGONS ~d ~d~%", length(T), 4 * length(T)),
+  for t in T do printf(s, "3 ~d ~d ~d~%", t[1], t[2], t[3]),
+  printf(s, "POINT_DATA ~d~%SCALARS gaussian_curvature double 1~%LOOKUP_TABLE default~%", length(V)),
+  for x in Ks do printf(s, "~,10e~%", x),
+  printf(s, "SCALARS mean_curvature double 1~%LOOKUP_TABLE default~%"),
+  for x in Hs do printf(s, "~,10e~%", x),
+  printf(s, "NORMALS normals double~%"),
+  for N in NN do printf(s, "~,10e ~,10e ~,10e~%", N[1], N[2], N[3]),
+  close(s), filename)$
+
+/* Export the exact definition in geomdl (NURBS-Python) JSON format */
+nurbs__json_list(L) := block([s: "["],
+  for k:1 thru length(L) do
+    s: sconcat(s, if k > 1 then ", " else "",
+               if listp(L[k]) then nurbs__json_list(L[k]) else printf(false, "~,17e", float(L[k]))),
+  sconcat(s, "]"))$
+
+nurbs_export_json(obj, filename) := block([s, rat: if nurbs_is_rational(obj) then "true" else "false"],
+  s: openw(filename),
+  if nurbs_curve_p(obj) then
+    printf(s, "{\"shape\": {\"type\": \"curve\", \"count\": 1, \"data\": [{\"rational\": ~a, \"dimension\": ~d, \"degree\": ~d, \"knotvector\": ~a, \"control_points\": {\"points\": ~a, \"weights\": ~a}}]}}~%",
+      rat, length(first(obj@ctrlpts)), obj@degree, nurbs__json_list(obj@knots),
+      nurbs__json_list(obj@ctrlpts), nurbs__json_list(obj@weights))
+  elseif nurbs_surface_p(obj) then
+    printf(s, "{\"shape\": {\"type\": \"surface\", \"count\": 1, \"data\": [{\"rational\": ~a, \"dimension\": 3, \"degree_u\": ~d, \"degree_v\": ~d, \"knotvector_u\": ~a, \"knotvector_v\": ~a, \"size_u\": ~d, \"size_v\": ~d, \"control_points\": {\"points\": ~a, \"weights\": ~a}}]}}~%",
+      rat, obj@degree_u, obj@degree_v, nurbs__json_list(obj@knots_u), nurbs__json_list(obj@knots_v),
+      length(obj@ctrlpts), length(first(obj@ctrlpts)),
+      nurbs__json_list(apply(append, obj@ctrlpts)), nurbs__json_list(flatten(obj@weights)))
+  else (close(s), error("nurbs_export_json: not a NURBS curve or surface")),
+  close(s), filename)$
+
+/* Human-readable summary */
+nurbs_info(obj) := (
+  if nurbs_curve_p(obj) then
+    printf(true, "NURBS curve: degree ~d, ~d control points, ~d knots, rational: ~a, domain ~a~%",
+      obj@degree, length(obj@ctrlpts), length(obj@knots), nurbs_is_rational(obj), nurbs_curve_domain(obj))
+  else
+    printf(true, "NURBS surface: degrees (~d,~d), net ~dx~d, rational: ~a, domain ~a~%",
+      obj@degree_u, obj@degree_v, length(obj@ctrlpts), length(first(obj@ctrlpts)),
+      nurbs_is_rational(obj), nurbs_surface_domain(obj)),
+  done)$
+
+/* ---- Optional compilation ----------------------------------------------
+   Translates and compiles the hot kernels (span search and basis
+   functions) to native code through Lisp.  See docs/benchmarks.md for the
+   measured effect.  Exact and symbolic arithmetic keep working.           */
+nurbs_compile() := (compile(nurbs_find_span, nurbs_basis_funs, nurbs_ders_basis_funs), done)$
+
+printf(true, "NURBS-Maxima ~a loaded.~%", nurbs_version)$

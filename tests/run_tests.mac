@@ -1,0 +1,12 @@
+/* ==========================================================================
+   NURBS-Maxima -- test runner
+       maxima -b tests/run_tests.mac
+   or in wxMaxima:  batch("C:/.../NURBS-Maxima/tests/run_tests.mac")$
+   Runs the rtest suite (tests/rtest_nurbs.mac) and prints a summary.
+   ========================================================================== */
+nurbs_test_dir : pathname_directory(load_pathname)$
+load(sconcat(nurbs_test_dir, "../nurbs_maxima.mac"))$
+nurbs_rtest_start : elapsed_real_time()$
+batch(sconcat(nurbs_test_dir, "rtest_nurbs.mac"), test)$
+printf(true, "~%rtest_nurbs.mac finished in ~,1f s (see the summary line above)~%",
+       elapsed_real_time() - nurbs_rtest_start)$

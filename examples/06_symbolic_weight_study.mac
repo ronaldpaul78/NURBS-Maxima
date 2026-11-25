@@ -1,0 +1,59 @@
+/* ==========================================================================
+   Example 06 (advanced) -- Case study 2:
+   Symbolic parametric study of a weight w
+   --------------------------------------------------------------------------
+   Weights are left as a symbol w.  NURBS-Maxima then returns curvature and
+   geometry as closed-form functions of w, something a floating-point
+   library cannot do.
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+assume(w > 0)$
+
+/* ---- Part A: quadratic rational Bezier curve, middle weight w --------- */
+Q : nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, w, 1])$
+Cw : nurbs_curve_span_expr(Q, 2, t);
+/* implicit equation: eliminate t from x(t), y(t) */
+imp : factor(resultant(num(ratsimp(x - Cw[1])) , num(ratsimp(y - Cw[2])), t));
+print("Conic type from the quadratic part (discriminant):",
+      block([A: coeff(expand(imp), x, 2), Bc: coeff(coeff(expand(imp), x, 1), y, 1),
+             Cc: coeff(expand(imp), y, 2)], factor(Bc^2 - 4*A*Cc)))$
+kmid : ratsimp(nurbs_curve_curvature(Q, 1/2));
+print("Curvature at the apex as a function of w:", kmid)$
+print("Endpoint curvature as a function of w:", ratsimp(nurbs_curve_curvature(Q, 0)))$
+/* B^2 - 4AC > 0 (hyperbola) for w > 1, = 0 (parabola) for w = 1, < 0
+   (ellipse) for w < 1.  w = cos(45 deg) = 1/sqrt(2) gives an exact
+   circular arc: centre (0,-1), radius sqrt(2).                           */
+print("With w = 1/sqrt(2): x^2 + (y+1)^2 - 2 =",
+      ratsimp(subst(w = 1/sqrt(2), Cw[1]^2 + (Cw[2] + 1)^2 - 2), algebraic))$
+printf(true, "~%     w      apex curvature   arc length~%")$
+for wv in [0.25, 0.5, 1/sqrt(2), 1, 2, 4] do
+  printf(true, "  ~6,3f    ~12,6f    ~12,6f~%", float(wv), float(subst(w = wv, kmid)),
+         nurbs_curve_length(nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, float(wv), 1])))$
+
+/* ---- Part B: biquadratic patch with a weighted centre ------------------ */
+P : [[[0,0,0], [0,1,0], [0,2,0]],
+     [[1,0,0], [1,1,1], [1,2,0]],
+     [[2,0,0], [2,1,0], [2,2,0]]]$
+S : nurbs_bezier_surface(P, [[1,1,1], [1,w,1], [1,1,1]])$
+KH : nurbs_curvature_sym(S, 2, 2, s, t)$
+K0 : factor(ratsimp(subst([s = 1/2, t = 1/2], KH[1])));
+H0 : factor(ratsimp(subst([s = 1/2, t = 1/2], KH[2])));
+print("Height of the centre point as a function of w:",
+      factor(nurbs_surface_point(S, 1/2, 1/2)[3]))$
+print("dK/dw at the centre:", factor(diff(K0, w)))$
+print("dK/dw > 0 for every w > 0, so K at the centre grows monotonically with w:", is(diff(K0, w) > 0))$
+printf(true, "~%     w      K(centre)       H(centre)       area~%")$
+for wv in [0.5, 1, 2, 4, 8] do block([Sn: nurbs_bezier_surface(P, [[1,1,1], [1,wv,1], [1,1,1]])],
+  printf(true, "  ~6,2f  ~14,8f  ~14,8f  ~12,8f~%", wv, float(subst(w = wv, K0)),
+         float(subst(w = wv, H0)), nurbs_surface_area(Sn)))$
+
+/* consistency with the numerical pipeline */
+print("Symbolic K(w=3) - numerical K(w=3):",
+      float(subst(w = 3, K0)) - nurbs_gaussian_curvature(nurbs_bezier_surface(P, [[1,1,1],[1,3,1],[1,1,1]]), 0.5, 0.5))$
+
+/* plot of K(centre) against w */
+if nurbs_show_plots then (load(draw), draw2d(explicit(K0, w, 0.1, 10), xlabel = "w", ylabel = "K(1/2,1/2)"))$
+draw2d(explicit(K0, w, 0.1, 10), xlabel = "w", ylabel = "K at the centre",
+       terminal = pngcairo, file_name = sconcat(dir, "06_K_vs_w"))$
+print("File: 06_K_vs_w.png")$

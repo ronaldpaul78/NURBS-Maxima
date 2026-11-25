@@ -1,0 +1,296 @@
+/* ==========================================================================
+   NURBS-Maxima -- regression test suite in Maxima's standard rtest format.
+
+   The package must be loaded first:
+       load("NURBS-Maxima/nurbs_maxima.mac")$
+       batch("NURBS-Maxima/tests/rtest_nurbs.mac", test)$
+   or simply run the wrapper  maxima -b tests/run_tests.mac
+
+   Each test is a pair "expression; expected result;".  Most tests return
+   true when a property holds within the stated tolerance.
+   ========================================================================== */
+
+/* ---- setup ---------------------------------------------------------------- */
+(t_dist(a, b) := lmax(cons(0.0, map(abs, flatten([float(a - b)])))), 0);
+0;
+(U1 : [0,0,0,1,2,3,4,4,5,5,5], U3 : [0,0,0,0,0.2,0.5,0.5,0.8,1,1,1,1],
+ bsU : [0,0,0,0,1/3,2/3,1,1,1,1],
+ bsP : [[0,0,0],[1,2,1],[2,-1,2],[4,1,0],[5,3,1],[7,0,2]],
+ circ : nurbs_circle(1), ratc : nurbs_curve(3, bsU, bsP, [1, 2, 1/2, 1, 3, 1]),
+ bez : nurbs_bezier_curve([[0,0],[1,2],[3,3],[4,0]]),
+ R : 2, r : 1/2, tor : nurbs_torus(R, r), torf : nurbs_float(tor),
+ sph : nurbs_sphere(1), sphf : nurbs_float(sph), us : makelist(k/13.0, k, 0, 13), 0);
+0;
+
+/* ==== Stage 1: B-spline bases and knot vectors =========================== */
+/* P&T example 2.3 */
+nurbs_find_span(7, 2, 5/2, U1);
+4;
+[nurbs_find_span(7, 2, 0, U1), nurbs_find_span(7, 2, 5, U1)];
+[2, 7];
+nurbs_basis_funs(4, 5/2, 2, U1);
+[1/8, 3/4, 1/8];
+nurbs_ders_basis_funs(4, 5/2, 2, 2, U1);
+matrix([1/8, 3/4, 1/8], [-1/2, 0, 1/2], [1, -2, 1]);
+/* partition of unity and non-negativity on 41 parameters */
+is(t_dist(makelist(apply("+", bspline_basis_all(3, k/40.0, U3)), k, 0, 40), makelist(1, k, 0, 40)) < 1e-14);
+true;
+every(lambda([L], every(lambda([x], x >= 0), L)), makelist(bspline_basis_all(3, k/40.0, U3), k, 0, 40));
+true;
+/* Cox-de Boor recursion = algorithm A2.2 */
+is(t_dist(makelist(makelist(bspline_basis(i, 3, k/17.0, U3), i, 0, 7), k, 0, 17),
+          makelist(bspline_basis_all(3, k/17.0, U3), k, 0, 17)) < 1e-14);
+true;
+/* derivatives: sum is zero and match central differences */
+block([dd: nurbs_ders_basis_funs(6, 0.63, 3, 3, U3)], is(abs(apply("+", args(row(dd, 2))[1])) < 1e-12));
+true;
+block([h: 1e-6], is(t_dist((nurbs_basis_funs(6, 0.63 + h, 3, U3) - nurbs_basis_funs(6, 0.63 - h, 3, U3)) / (2*h),
+                           args(row(nurbs_ders_basis_funs(6, 0.63, 3, 1, U3), 2))[1]) < 1e-7));
+true;
+bspline_basis_piecewise(2, 2, [0,0,0,1,2,3,3,3], u)[1][2];
+u^2/2;
+ratsimp(nurbs_basis_funs(3, t, 3, knots_bezier(3)) - makelist(bernstein(i, 3, t), i, 0, 3));
+[0, 0, 0, 0];
+knots_clamped_uniform(6, 3);
+[0,0,0,0,1/3,2/3,1,1,1,1];
+[knots_multiplicity(4, U1), knots_unique(U1)];
+[2, [0,1,2,3,4,5]];
+knots_continuity(U1, 2);
+[[1,1],[2,1],[3,1],[4,0]];
+errcatch(knots_validate([0,0,1,1], 2, 3));
+[];
+errcatch(knots_validate([0,0,0,0.6,0.4,1,1,1], 2, 5));
+[];
+/* nurbs__zero: float tolerance, exact radicals, symbolic */
+[nurbs__zero(0.1 + 0.2 - 0.3), nurbs__zero(sqrt(2)/2 - 1/sqrt(2)), nurbs__zero(w - w), nurbs__zero(w - 1.0), nurbs__zero(1e-3)];
+[true, true, true, false, false];
+/* float knots that differ only by rounding are one knot */
+knots_multiplicity(0.3, [0, 0, 0.1 + 0.2, 0.3, 1, 1]);
+2;
+
+/* ==== Stage 2: NURBS curves ============================================== */
+/* exactness: x^2 + y^2 = 1 symbolically on the four spans */
+every(lambda([e], is(ratsimp(e[2] . e[2], algebraic) = 1)), nurbs_curve_expr(circ, t));
+true;
+ratsimp(nurbs_curve_point(circ, 1/8) - [1/sqrt(2), 1/sqrt(2)], algebraic);
+[0, 0];
+is(t_dist(makelist(nurbs_curve_curvature(nurbs_circle(3), k/13.0), k, 0, 13), makelist(1/3, k, 0, 13)) < 1e-12);
+true;
+is(abs(nurbs_curve_length(circ) - 2*%pi) < 1e-10);
+true;
+ratsimp(nurbs_curve_span_expr(bez, 3, t) - sum(bernstein(i, 3, t) * bez@ctrlpts[i+1], i, 0, 3));
+[0, 0];
+block([h: 1e-5], is(t_dist((nurbs_curve_point(ratc, 0.41 + h) - nurbs_curve_point(ratc, 0.41 - h)) / (2*h),
+                           nurbs_curve_derivs(ratc, 0.41, 1)[2]) < 1e-6));
+true;
+is(t_dist(nurbs_curve_point(nurbs_scale_weights(ratc, 7), 0.3), nurbs_curve_point(ratc, 0.3)) < 1e-13);
+true;
+[nurbs_is_rational(ratc), nurbs_is_rational(bez), nurbs_is_rational(nurbs_set_weight(bez, 1, w))];
+[true, false, true];
+/* knot insertion, refinement, split, reverse */
+is(t_dist(map(lambda([u], nurbs_curve_point(nurbs_curve_insert_knot(ratc, 0.5, 2), u)), us),
+          map(lambda([u], nurbs_curve_point(ratc, u)), us)) < 1e-13);
+true;
+block([Rf: nurbs_curve_refine(ratc, [0.2, 0.5, 0.5, 0.9])],
+  [length(Rf@knots), is(t_dist(map(lambda([u], nurbs_curve_point(Rf, u)), us), map(lambda([u], nurbs_curve_point(ratc, u)), us)) < 1e-13)]);
+[14, true];
+block([sp: nurbs_curve_split(ratc, 0.37)],
+  is(t_dist([nurbs_curve_point(sp[1], 0.37), nurbs_curve_point(sp[1], 0.2), nurbs_curve_point(sp[2], 0.8)],
+            [nurbs_curve_point(ratc, 0.37), nurbs_curve_point(ratc, 0.2), nurbs_curve_point(ratc, 0.8)]) < 1e-13));
+true;
+errcatch(nurbs_curve_split(ratc, 0));
+[];
+is(t_dist(nurbs_curve_point(nurbs_curve_reverse(ratc), 0.3), nurbs_curve_point(ratc, 0.7)) < 1e-13);
+true;
+/* degree elevation A5.9: shape unchanged, interior multiplicities + t */
+block([E: nurbs_curve_elevate_degree(ratc, 2)],
+  [E@degree, E@knots, is(t_dist(map(lambda([u], nurbs_curve_point(E, u)), us), map(lambda([u], nurbs_curve_point(ratc, u)), us)) < 1e-13)]);
+[5, [0,0,0,0,0,0,1/3,1/3,1/3,2/3,2/3,2/3,1,1,1,1,1,1], true];
+block([E: nurbs_curve_elevate_degree(circ, 1)],
+  every(lambda([e], is(ratsimp(e[2] . e[2], algebraic) = 1)), nurbs_curve_expr(E, t)));
+true;
+/* Bezier decomposition */
+block([B: nurbs_curve_decompose(ratc)],
+  [length(B), map(lambda([b], b@knots), B)[2], is(t_dist(nurbs_curve_point(B[2], 1/2), nurbs_curve_point(ratc, 1/2)) < 1e-14)]);
+[3, [1/3,1/3,1/3,1/3,2/3,2/3,2/3,2/3], true];
+length(nurbs_curve_decompose(circ));
+4;
+/* point inversion: circle, closest point to (2,2) is (1/sqrt2, 1/sqrt2) */
+block([pr: nurbs_curve_project(circ, [2, 2])],
+  is(abs(pr[1] - 1/8) < 1e-10 and abs(pr[3] - (2*sqrt(2) - 1)) < 1e-10));
+true;
+/* inversion of a point lying on the curve recovers its parameter */
+is(abs(first(nurbs_curve_project(ratc, nurbs_curve_point(ratc, 0.6180))) - 0.6180) < 1e-9);
+true;
+/* projection residual is orthogonal to the tangent */
+block([pr: nurbs_curve_project(ratc, [3, 1, 2]), D],
+  D: nurbs_curve_derivs(nurbs_float(ratc), pr[1], 1),
+  is(abs(D[2] . (pr[2] - [3, 1, 2])) < 1e-9 * nurbs__norm(D[2])));
+true;
+/* transformations: affine and projective invariance */
+is(t_dist(nurbs_curve_point(nurbs_rotate(ratc, [1,1,1], 1.1), 0.33),
+          first(nurbs__transform_point(nurbs_rotation_matrix([1,1,1], 1.1), nurbs_curve_point(ratc, 0.33), 1))) < 1e-12);
+true;
+block([Mp: matrix([1,0,0,0],[0,2,0,1],[0,0,1,0],[0.1,0,0.2,1])],
+  is(t_dist(nurbs_curve_point(nurbs_transform(ratc, Mp), 0.62), first(nurbs__transform_point(Mp, nurbs_curve_point(ratc, 0.62), 1))) < 1e-12));
+true;
+nurbs_curve_point(nurbs_scale(nurbs_translate(circ, [1,2]), 2), 0);
+[4, 4];
+/* interpolation by LU: passes through the data; exact with 'uniform */
+block([Q: [[0,0],[1,2],[3,3],[4,1],[6,2],[7,0]], ic],
+  ic: nurbs_interpolate_curve(Q, 3),
+  is(t_dist(map(lambda([u], nurbs_curve_point(ic, u)), params_chord(Q)), Q) < 1e-12));
+true;
+block([Q: [[0,0],[1,2],[3,3],[4,1],[6,2],[7,0]], ic],
+  ic: nurbs_interpolate_curve(Q, 3, 'uniform),
+  map(lambda([u], nurbs_curve_point(ic, u)), params_uniform(Q)) - Q);
+[[0,0],[0,0],[0,0],[0,0],[0,0],[0,0]];
+errcatch(nurbs_interpolate_curve([[0,0],[1,1]], 3));
+[];
+errcatch(nurbs_interpolate_curve([[0,0],[1,1],[1,1],[2,0]], 2));
+[];
+/* symbolic weight: conic family of the quadratic rational Bezier */
+block([Q: nurbs_bezier_curve([[0,0],[1,1],[2,0]], [1, w, 1])], ratsimp(nurbs_curve_point(Q, 1/2)));
+[1, w/(w+1)];
+block([Q: nurbs_bezier_curve([[0,0],[1,1],[2,0]], [1, w, 1])], ratsimp(subst(w = 3, nurbs_curve_curvature(Q, 1/2))));
+3;
+/* bigfloat evaluation */
+block([fpprec: 40, P], P: nurbs_curve_point(circ, bfloat(3/10)), [bfloatp(P[1]), is(abs(P . P - 1) < 1b-38)]);
+[true, true];
+
+/* ==== Stage 3: NURBS surfaces ============================================ */
+is(lmax(map(lambda([X], abs((sqrt(X[1]^2+X[2]^2) - R)^2 + X[3]^2 - r^2)), apply(append, nurbs_surface_grid(tor, 12, 12)))) < 1e-13);
+true;
+is(lmax(map(lambda([X], abs(X . X - 1)), apply(append, nurbs_surface_grid(sph, 12, 12)))) < 1e-13);
+true;
+block([X: nurbs_surface_point(sph, 1/8, 1/4)], radcan(X . X));
+1;
+block([h: 1e-5, D: nurbs_surface_derivs(torf, 0.31, 0.62, 2)],
+  is(t_dist((nurbs_surface_point(torf, 0.31+h, 0.62) - nurbs_surface_point(torf, 0.31-h, 0.62))/(2*h), D[2,1]) < 1e-6));
+true;
+is(t_dist(nurbs_surface_normal(torf, 0.1, 0.0), nurbs__unit(nurbs_surface_point(torf, 0.1, 0.0) * [1, 1, 0])) < 1e-12);
+true;
+nurbs_surface_normal(sph, 0.3, 0.0);
+und;
+is(t_dist(nurbs_curve_point(nurbs_surface_isocurve(torf, 'u, 0.3), 0.7), nurbs_surface_point(torf, 0.3, 0.7)) < 1e-13);
+true;
+is(lmax(map(lambda([X], abs(X[1]^2+X[2]^2-1)), apply(append, nurbs_surface_grid(nurbs_cylinder(1, 2), 8, 3)))) < 1e-13);
+true;
+nurbs_surface_point(nurbs_ruled(nurbs_line([0,0,0],[1,0,0]), nurbs_line([0,1,1],[1,1,0])), 3/10, 3/5);
+[3/10, 3/5, 21/50];
+block([M: nurbs_surface_mesh(tor, 10, 6)], [length(M[1]), length(M[2])]);
+[77, 120];
+/* surface modelling operations: shape unchanged */
+is(t_dist(nurbs_surface_point(nurbs_surface_insert_knot(tor, 'u, 0.3, 1), 0.31, 0.7), nurbs_surface_point(torf, 0.31, 0.7)) < 1e-13);
+true;
+is(t_dist(nurbs_surface_point(nurbs_surface_refine(tor, 'v, [0.1, 0.6]), 0.31, 0.7), nurbs_surface_point(torf, 0.31, 0.7)) < 1e-13);
+true;
+block([E: nurbs_surface_elevate_degree(tor, 'v, 1)],
+  [E@degree_v, is(t_dist(nurbs_surface_point(E, 0.31, 0.7), nurbs_surface_point(torf, 0.31, 0.7)) < 1e-13)]);
+[3, true];
+block([B: nurbs_surface_decompose(tor)],
+  [length(B), length(first(B)), is(t_dist(nurbs_surface_point(B[2][3], 0.3, 0.6), nurbs_surface_point(torf, 0.3, 0.6)) < 1e-13)]);
+[4, 4, true];
+/* surface point inversion */
+block([pr: nurbs_surface_project(tor, nurbs_surface_point(torf, 0.37, 0.81))],
+  is(abs(pr[1] - 0.37) < 1e-8 and abs(pr[2] - 0.81) < 1e-8 and pr[4] < 1e-10));
+true;
+/* distance from an outside point to the torus = |rho - R| - r analytically */
+block([P: [3, 0.2, 0.9], pr], pr: nurbs_surface_project(tor, P),
+  is(abs(pr[4] - (sqrt((sqrt(P[1]^2 + P[2]^2) - R)^2 + P[3]^2) - r)) < 1e-9));
+true;
+
+/* ==== Stage 4: differential geometry ===================================== */
+is(t_dist(map(lambda([q], nurbs_gaussian_curvature(sphf, q[1], q[2])), [[0.1,0.2],[0.3,0.7],[0.55,0.45]]), [1,1,1]) < 1e-12);
+true;
+is(t_dist(map(lambda([q], nurbs_mean_curvature(sphf, q[1], q[2])), [[0.1,0.2],[0.3,0.7]]), [-1,-1]) < 1e-12);
+true;
+nurbs_classify_point(sphf, 0.3, 0.4);
+umbilic;
+/* exact K on the sphere at a rational parameter */
+radcan(nurbs_gaussian_curvature(sph, 1/8, 1/4));
+1;
+/* bigfloat K on the sphere */
+block([fpprec: 30, K], K: nurbs_gaussian_curvature(sph, bfloat(0.3), bfloat(0.3)), [bfloatp(K), is(abs(K - 1) < 1b-25)]);
+[true, true];
+/* torus: analytic K and H */
+block([uvt: makelist([k/7.0, mod(3*k, 7)/7.0 + 0.03], k, 0, 7), Kx, Hx],
+  Kx(X) := block([c: (sqrt(X[1]^2+X[2]^2) - R)/r], c / (r*(R + r*c))),
+  Hx(X) := block([c: (sqrt(X[1]^2+X[2]^2) - R)/r], -(R + 2*r*c) / (2*r*(R + r*c))),
+  is(t_dist(map(lambda([q], [nurbs_gaussian_curvature(torf, q[1], q[2]), nurbs_mean_curvature(torf, q[1], q[2])]), uvt),
+            map(lambda([q], block([X: nurbs_surface_point(torf, q[1], q[2])], [Kx(X), Hx(X)])), uvt)) < 1e-12));
+true;
+is(t_dist(nurbs_principal_curvatures(torf, 0.1, 0.0), [-1/(R+r), -1/r]) < 1e-12);
+true;
+[nurbs_classify_point(torf, 0.1, 0.0), nurbs_classify_point(torf, 0.1, 0.5), nurbs_classify_point(sphf, 0.4, 1.0)];
+[elliptic, hyperbolic, singular];
+block([pd: nurbs_principal_directions(torf, 0.1, 0.3), n: nurbs_surface_normal(torf, 0.1, 0.3)],
+  is(t_dist([pd[1] . pd[2], pd[1] . n, pd[2] . n], [0, 0, 0]) < 1e-12));
+true;
+/* the shared helper returns the same values as the individual functions */
+block([g: nurbs_surface_geometry(torf, 0.2, 0.3)],
+  is(t_dist([g[7], g[8]], [nurbs_gaussian_curvature(torf, 0.2, 0.3), nurbs_mean_curvature(torf, 0.2, 0.3)]) = 0.0));
+true;
+/* global integrals (Gauss-Bonnet, area, volume) */
+is(abs(nurbs_total_gaussian_curvature(sph, 2) - 4*%pi) < 1e-6);
+true;
+is(abs(nurbs_total_gaussian_curvature(tor, 2)) < 1e-10);
+true;
+is(abs(nurbs_surface_area(tor, 2) - 4*%pi^2*R*r) < 1e-7);
+true;
+is(abs(nurbs_surface_volume(tor, 2) - 2*%pi^2*R*r^2) < 1e-7);
+true;
+/* Gauss-Bonnet on a non-uniformly scaled sphere (ellipsoid, K not constant) */
+is(abs(nurbs_total_gaussian_curvature(nurbs_scale(sph, [3, 2, 1]), 4) - 4*%pi) < 1e-5);
+true;
+block([sing: nurbs_singular_points(sph, 4, 4)], [length(sing), every(lambda([s], abs(abs(s[3][3]) - 1) < 1e-12), sing)]);
+[10, true];
+nurbs_singular_points(tor, 8, 8);
+[];
+is(abs(nurbs_curve_torsion(nurbs_float(circ), 0.3)) < 1e-12);
+true;
+block([fr: nurbs_curve_frenet(ratc, 0.4)],
+  is(t_dist([fr[1].fr[2], fr[1].fr[3], fr[2].fr[3], fr[1].fr[1], fr[2].fr[2]], [0,0,0,1,1]) < 1e-12));
+true;
+block([ks: nurbs_curvature_sym(nurbs_bezier_surface([[[0,0,0],[0,1,0]],[[1,0,0],[1,1,1]]]), 1, 1, s, t)],
+  ratsimp(ks[1] + 1/(1 + s^2 + t^2)^2));
+0;
+/* symbolic weight in a surface: K(1/2,1/2; w) of a rational biquadratic
+   patch agrees with the numerical value for w = 2                        */
+block([P: [[[0,0,0],[0,1,0],[0,2,0]], [[1,0,0],[1,1,1],[1,2,0]], [[2,0,0],[2,1,0],[2,2,0]]],
+       Wt: [[1,1,1],[1,w,1],[1,1,1]], S, K],
+  S: nurbs_bezier_surface(P, Wt),
+  K: nurbs_curvature_sym(S, 2, 2, s, t)[1],
+  is(abs(float(subst([s = 1/2, t = 1/2, w = 2], K)) -
+         nurbs_gaussian_curvature(nurbs_bezier_surface(P, subst(w = 2, Wt)), 0.5, 0.5)) < 1e-12));
+true;
+
+/* ==== Stage 5: visualisation and export ================================== */
+listp(nurbs_draw_curve(circ, samples = 20));
+true;
+listp(nurbs_draw_surface(tor, nu = 6, nv = 6, control = true, normals = 3));
+true;
+block([f: nurbs_export_obj(tor, sconcat(maxima_tempdir, "/rt.obj"), 6, 4), s, l, nv: 0, nf: 0],
+  s: openr(f),
+  while (l: readline(s)) # false do (
+    if slength(l) > 1 and substring(l, 1, 3) = "v " then nv: nv + 1,
+    if slength(l) > 1 and substring(l, 1, 3) = "f " then nf: nf + 1),
+  close(s), [nv, nf]);
+[35, 48];
+block([f: nurbs_export_json(bez, sconcat(maxima_tempdir, "/rt.json")), s, l],
+  s: openr(f), l: readline(s), close(s), is(ssearch("\"rational\": false", l) # false));
+true;
+stringp(nurbs_export_vtk(tor, sconcat(maxima_tempdir, "/rt.vtk"), 4, 4));
+true;
+/* robustness: user functions named f, id or g must not change the results */
+(f(x) := x^2 + 1, id(i, j) := 0, g(x) := -x, 0);
+0;
+block([C: nurbs_float(nurbs_circle(1)), Tm: nurbs_surface_mesh(nurbs_torus(2, 1/2), 2, 2)],
+  [is(abs(nurbs__norm(nurbs_curve_point(C, 0.3)) - 1) < 1e-14),
+   Tm[2][1],
+   is(abs(nurbs_surface_area(nurbs_torus(2, 1/2), 2) - float(4 * %pi^2)) < 1e-6),
+   is(nurbs_curve_insert_knot(nurbs_circle(1), 1/8, 1)@knots[4] = 1/8),
+   length(nurbs_surface_refine(nurbs_torus(2, 1/2), 'u, [1/8])@ctrlpts)]);
+[true, [1, 4, 5], true, true, 10];
+(kill(f, id, g), 0);
+0;

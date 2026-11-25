@@ -1,0 +1,225 @@
+/* ==========================================================================
+   SUPERFICIES NURBS DE REFERENCIA  -  solo datos, para probar el paquete
+   --------------------------------------------------------------------------
+   Cada superficie trae: grados (p, q), vectores de nudos (U, V),
+   puntos de control P (filas en la dirección u: P[i+1][j+1] = P_ij) y
+   pesos W (misma forma que P), la fuente y las propiedades conocidas
+   que puedes comprobar.
+
+   Uso:
+     load("C:/Users/DREP/Documents/NURBSMAXIMA/NURBS-Maxima/nurbs_maxima.mac")$
+     load("C:/Users/DREP/Documents/NURBSMAXIMA/NURBS-Maxima/examples/gallery/superficies_referencia.mac")$
+     S : nurbs_surface(silla_p, silla_q, silla_U, silla_V, silla_P, silla_W)$
+     nurbs_plot(S, control = true)$
+
+   Todas las superficies se verificaron con NURBS-Maxima 2.0.0 (Maxima 5.46):
+   las propiedades indicadas se cumplen hasta ~1e-13 o mejor.
+   ========================================================================== */
+
+
+/* --------------------------------------------------------------------------
+   1. PARABOLOIDE HIPERBÓLICO (silla de montar)  z = x*y,  x, y en [-1, 1]
+   Fuente: superficie bilineal, Piegl & Tiller, The NURBS Book (2a ed.),
+           sec. 8.2; curvaturas de z = f(x,y) en do Carmo, Differential
+           Geometry of Curves and Surfaces, sec. 3-3.
+   Propiedades:  x = 2u-1, y = 2v-1
+     K = -1/(1 + x^2 + y^2)^2   (en u = v = 1/2: K = -1, punto hiperbólico)
+     |H| = |x*y| / (1 + x^2 + y^2)^(3/2)
+   -------------------------------------------------------------------------- */
+silla_p : 1$  silla_q : 1$
+silla_U : [0, 0, 1, 1]$
+silla_V : [0, 0, 1, 1]$
+silla_P : [[[-1, -1,  1], [-1, 1, -1]],
+           [[ 1, -1, -1], [ 1, 1,  1]]]$
+silla_W : [[1, 1], [1, 1]]$
+
+
+/* --------------------------------------------------------------------------
+   2. SUPERFICIE DE ENNEPER (superficie mínima, polinómica => Bézier bicúbica)
+      x = a - a^3/3 + a*b^2,  y = b - b^3/3 + b*a^2,  z = a^2 - b^2,
+      con a = 2u-1, b = 2v-1  (a, b en [-1, 1])
+   Fuente: parametrización clásica (A. Enneper, 1864; do Carmo sec. 3-5;
+           Wolfram MathWorld "Enneper's Minimal Surface"). Los puntos de
+           control se obtuvieron convirtiendo el polinomio a la base de
+           Bernstein (son exactos).
+   Propiedades:
+     H = 0 en todo punto (superficie mínima)
+     K = -4 / (1 + a^2 + b^2)^4   (en u = v = 1/2: K = -4)
+   -------------------------------------------------------------------------- */
+enneper_p : 3$  enneper_q : 3$
+enneper_U : [0, 0, 0, 0, 1, 1, 1, 1]$
+enneper_V : [0, 0, 0, 0, 1, 1, 1, 1]$
+enneper_P : [[[-5/3, -5/3,    0], [-1/3, -1,   4/3], [-1/3,  1,   4/3], [-5/3, 5/3,    0]],
+             [[-1,   -1/3, -4/3], [-5/9, -5/9,   0], [-5/9, 5/9,    0], [-1,   1/3, -4/3]],
+             [[ 1,   -1/3, -4/3], [ 5/9, -5/9,   0], [ 5/9, 5/9,    0], [ 1,   1/3, -4/3]],
+             [[ 5/3, -5/3,    0], [ 1/3, -1,   4/3], [ 1/3,  1,   4/3], [ 5/3, 5/3,    0]]]$
+enneper_W : makelist(makelist(1, j, 1, 4), i, 1, 4)$
+
+
+/* --------------------------------------------------------------------------
+   3. SUPERFICIE B-SPLINE DE EJEMPLO DE NURBS-Python (geomdl)
+   Fuente: documentación de NURBS-Python 5.x, ejemplo "visualization-3.py"
+     https://nurbs-python.readthedocs.io/en/5.x/_downloads/d6f0c137b5c9ecec3980708ed80bf3f9/visualization-3.py
+   Grado 3 x 3, red 6 x 6, nudos NO normalizados (dominio [0, 3] x [0, 3]).
+   Propiedades: superficie libre (sin fórmula cerrada). Sirve para comparar
+     puntos/derivadas con geomdl. Valor exacto: S(3/2, 3/2) = [0, 0, -3803/512].
+   -------------------------------------------------------------------------- */
+geomdl_p : 3$  geomdl_q : 3$
+geomdl_U : [0, 0, 0, 0, 1, 2, 3, 3, 3, 3]$
+geomdl_V : [0, 0, 0, 0, 1, 2, 3, 3, 3, 3]$
+geomdl_P : [[[-25, -25, -10], [-25, -15, -5], [-25, -5,  0], [-25, 5,  0], [-25, 15, -5], [-25, 25, -10]],
+            [[-15, -25,  -8], [-15, -15, -4], [-15, -5, -4], [-15, 5, -4], [-15, 15, -4], [-15, 25,  -8]],
+            [[ -5, -25,  -5], [ -5, -15, -3], [ -5, -5, -8], [ -5, 5, -8], [ -5, 15, -3], [ -5, 25,  -5]],
+            [[  5, -25,  -3], [  5, -15, -2], [  5, -5, -8], [  5, 5, -8], [  5, 15, -2], [  5, 25,  -3]],
+            [[ 15, -25,  -8], [ 15, -15, -4], [ 15, -5, -4], [ 15, 5, -4], [ 15, 15, -4], [ 15, 25,  -8]],
+            [[ 25, -25, -10], [ 25, -15, -5], [ 25, -5,  2], [ 25, 5,  2], [ 25, 15, -5], [ 25, 25, -10]]]$
+geomdl_W : makelist(makelist(1, j, 1, 6), i, 1, 6)$
+
+
+/* --------------------------------------------------------------------------
+   4. PLACA CON AGUJERO (cuarto de placa, benchmark de análisis isogeométrico)
+   Fuente: T.J.R. Hughes, J.A. Cottrell, Y. Bazilevs, "Isogeometric
+     analysis: CAD, finite elements, NURBS, exact geometry and mesh
+     refinement", Comput. Methods Appl. Mech. Engrg. 194 (2005) 4135-4195,
+     sec. 3.2 (malla inicial de 2 elementos). Mismos pesos que el ejemplo
+     "platewithhole-nurbs" de nutils (0.5 + 0.25*sqrt(2)).
+   Geometría: placa [-4,0] x [0,4] menos el cuarto de círculo de radio 1.
+     u recorre el agujero (de (-1,0) a (0,1)); v va del agujero al borde.
+   Propiedades:
+     área exacta = 16 - %pi/4  (= 15.21460183660255...)
+     el borde v = 0 es un arco de circunferencia exacto: x^2 + y^2 = 1
+     superficie plana: K = 0, H = 0
+     dos puntos de control coinciden en la esquina (-4,4)
+   -------------------------------------------------------------------------- */
+placa_p : 2$  placa_q : 2$
+placa_U : [0, 0, 0, 1/2, 1, 1, 1]$
+placa_V : [0, 0, 0, 1, 1, 1]$
+placa_P : [[[-1,          0,         0], [-5/2, 0,   0], [-4, 0, 0]],
+           [[-1,          sqrt(2)-1, 0], [-5/2, 3/4, 0], [-4, 4, 0]],
+           [[1-sqrt(2),   1,         0], [-3/4, 5/2, 0], [-4, 4, 0]],
+           [[ 0,          1,         0], [ 0,   5/2, 0], [ 0, 4, 0]]]$
+placa_W : [[1,                1, 1],
+           [1/2 + sqrt(2)/4,  1, 1],
+           [1/2 + sqrt(2)/4,  1, 1],
+           [1,                1, 1]]$
+
+
+/* --------------------------------------------------------------------------
+   5. TECHO DE SCORDELIS-LO (cáscara cilíndrica, benchmark de láminas)
+   Fuente: A.C. Scordelis, K.S. Lo (1964); "shell obstacle course" de
+     T. Belytschko et al., Comput. Methods Appl. Mech. Engrg. 51 (1985);
+     usado en IGA por J. Kiendl et al., CMAME 198 (2009) 3902-3914.
+     Datos: R = 25, L = 50, ángulo de apertura 2*40 grados.
+   Construcción: arco circular de 80 grados = cónica racional cuadrática
+     con peso central cos(40°) (Piegl & Tiller, sec. 7.3); recta en la
+     dirección del eje (eje = eje y).
+   Propiedades:
+     x^2 + z^2 = 25^2 en todo punto
+     área exacta = R * (4*%pi/9) * L = 5000*%pi/9 (= 1745.329251994...)
+     K = 0 (desarrollable),  |H| = 1/(2R) = 0.02
+   -------------------------------------------------------------------------- */
+scordelis_R : 25$  scordelis_L : 50$  scordelis_a : 2*%pi/9$   /* 40 grados */
+scordelis_p : 2$  scordelis_q : 1$
+scordelis_U : [0, 0, 0, 1, 1, 1]$
+scordelis_V : [0, 0, 1, 1]$
+scordelis_P : block([R: scordelis_R, L: scordelis_L, a: scordelis_a],
+  [[[-R*sin(a), 0, R*cos(a)], [-R*sin(a), L, R*cos(a)]],
+   [[0,         0, R/cos(a)], [0,         L, R/cos(a)]],
+   [[ R*sin(a), 0, R*cos(a)], [ R*sin(a), L, R*cos(a)]]])$
+scordelis_W : [[1, 1], [cos(scordelis_a), cos(scordelis_a)], [1, 1]]$
+/* En decimales: R*sin(40°) = 16.06969024216348, R*cos(40°) = 19.15111107797445,
+   R/cos(40°) = 32.63518223330697, cos(40°) = 0.766044443118978            */
+
+
+/* --------------------------------------------------------------------------
+   6. HEMISFERIO CON AGUJERO DE 18 GRADOS (un cuarto)
+   Fuente: R.H. MacNeal, R.L. Harder, "A proposed standard set of problems
+     to test finite element accuracy", Finite Elem. Anal. Des. 1 (1985) 3-20;
+     usado en IGA por Kiendl et al. (2009). Radio R = 10.
+   Construcción: u = cuarto de circunferencia (peso sqrt(2)/2),
+     v = arco de meridiano de 72 grados, del ecuador (polar 90°) al borde
+     del agujero (polar 18°); peso central cos(36°).
+   Propiedades:
+     x^2 + y^2 + z^2 = R^2,   K = 1/R^2 = 0.01,  |H| = 1/R = 0.1 (umbílica)
+     área exacta = (%pi/2) R^2 cos(18°)          (= 149.3916082370...)
+     int K dA   = (%pi/2) cos(18°)               (= 1.493916082370...)
+     sin puntos singulares (el polo quedó fuera)
+   -------------------------------------------------------------------------- */
+hemis_R : 10$
+hemis_p : 2$  hemis_q : 2$
+hemis_U : [0, 0, 0, 1, 1, 1]$
+hemis_V : [0, 0, 0, 1, 1, 1]$
+/* meridiano en el plano xz: [radio horizontal, altura] y sus pesos */
+hemis_meridiano : block([R: hemis_R],
+  [[R, 0], [R, R*tan(%pi/5)], [R*sin(%pi/10), R*cos(%pi/10)]])$   /* 36° = %pi/5, 18° = %pi/10 */
+hemis_wmer : [1, cos(%pi/5), 1]$
+/* direcciones del cuarto de circunferencia en el plano xy y sus pesos */
+hemis_dir : [[1, 0], [1, 1], [0, 1]]$
+hemis_wdir : [1, sqrt(2)/2, 1]$
+hemis_P : makelist(makelist([hemis_dir[i][1]*hemis_meridiano[j][1],
+                             hemis_dir[i][2]*hemis_meridiano[j][1],
+                             hemis_meridiano[j][2]], j, 1, 3), i, 1, 3)$
+hemis_W : makelist(makelist(hemis_wdir[i]*hemis_wmer[j], j, 1, 3), i, 1, 3)$
+/* Explícitamente (decimales):
+   P_i0 (ecuador)  = [10,0,0], [10,10,0], [0,10,0]
+   P_i1            = [10,0,7.265425280], [10,10,7.265425280], [0,10,7.265425280]
+   P_i2 (agujero)  = [3.090169944,0,9.510565163], [3.090169944,3.090169944,9.510565163], [0,3.090169944,9.510565163]
+   W = [[1, 0.809016994, 1], [0.707106781, 0.572061403, 0.707106781], [1, 0.809016994, 1]] */
+
+
+/* --------------------------------------------------------------------------
+   7. HIPERBOLOIDE DE UNA HOJA (superficie reglada doblemente)
+      2(x^2 + y^2) - z^2 = 1,   z en [-1, 1]
+   Fuente: construcción reglada de Piegl & Tiller, sec. 8.3: segmentos que
+     unen la circunferencia z = -1 con la misma circunferencia girada 90°
+     en z = 1. Circunferencia de 9 puntos de P&T, sec. 7.5.
+   Propiedades:
+     residuo de 2(x^2+y^2) - z^2 - 1 = 0 (exacta)
+     K = -4 / (4(x^2+y^2) + z^2)^2   (K = -1 en la cintura z = 0, radio 1/sqrt(2))
+     todos los puntos hiperbólicos
+   -------------------------------------------------------------------------- */
+hiperb_p : 2$  hiperb_q : 1$
+hiperb_U : [0, 0, 0, 1/4, 1/4, 1/2, 1/2, 3/4, 3/4, 1, 1, 1]$
+hiperb_V : [0, 0, 1, 1]$
+hiperb_P : [[[ 1,  0, -1], [ 0,  1, 1]],
+            [[ 1,  1, -1], [-1,  1, 1]],
+            [[ 0,  1, -1], [-1,  0, 1]],
+            [[-1,  1, -1], [-1, -1, 1]],
+            [[-1,  0, -1], [ 0, -1, 1]],
+            [[-1, -1, -1], [ 1, -1, 1]],
+            [[ 0, -1, -1], [ 1,  0, 1]],
+            [[ 1, -1, -1], [ 1,  1, 1]],
+            [[ 1,  0, -1], [ 0,  1, 1]]]$
+hiperb_W : makelist(if oddp(i) then [1, 1] else [sqrt(2)/2, sqrt(2)/2], i, 1, 9)$
+
+
+/* --------------------------------------------------------------------------
+   8. CONO CIRCULAR RECTO  (radio de la base r = 2, altura h = 3)
+   Fuente: superficie reglada entre la circunferencia de la base y el
+     vértice (Piegl & Tiller, sec. 8.3; circunferencia de 9 puntos, sec. 7.5).
+   Propiedades:
+     x^2 + y^2 = (4/9)(3 - z)^2
+     K = 0 (desarrollable); el vértice (v = 1) es un punto SINGULAR
+     área lateral exacta = %pi r sqrt(r^2 + h^2) = 2 sqrt(13) %pi (= 22.6543...)
+   -------------------------------------------------------------------------- */
+cono_p : 2$  cono_q : 1$
+cono_U : hiperb_U$
+cono_V : [0, 0, 1, 1]$
+cono_P : [[[ 2,  0, 0], [0, 0, 3]],
+          [[ 2,  2, 0], [0, 0, 3]],
+          [[ 0,  2, 0], [0, 0, 3]],
+          [[-2,  2, 0], [0, 0, 3]],
+          [[-2,  0, 0], [0, 0, 3]],
+          [[-2, -2, 0], [0, 0, 3]],
+          [[ 0, -2, 0], [0, 0, 3]],
+          [[ 2, -2, 0], [0, 0, 3]],
+          [[ 2,  0, 0], [0, 0, 3]]]$
+cono_W : hiperb_W$
+
+
+/* --------------------------------------------------------------------------
+   9. TETERA DE UTAH (32 parches de Bézier bicúbicos, M. Newell 1975)
+   Está en un archivo aparte: tetera_utah_datos.mac
+   -------------------------------------------------------------------------- */
+
+print("superficies_referencia.mac: datos cargados (silla, enneper, geomdl, placa, scordelis, hemis, hiperb, cono)")$

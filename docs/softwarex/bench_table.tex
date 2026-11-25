@@ -1,0 +1,16 @@
+% Generated from tests/benchmark.mac + tests/benchmark_geomdl.py (run of 2026-11-25);
+% raw output in figures/benchmarks_run.md
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Operation & exact & double & bigfloat & double + & geomdl & double / \\
+ & & & (32 digits) & \code{compile} & & geomdl \\
+\midrule
+Curve point (circle)              & 0.42  & 0.26 & 1.66  & 0.12 & 0.0063 & 42$\times$ \\
+Curve derivatives, order 2        & 0.94  & 0.90 & 5.10  & 0.66 & 0.015  & 62$\times$ \\
+Surface point (torus)             & 0.92  & 0.56 & 4.04  & 0.43 & 0.012  & 47$\times$ \\
+Surface derivatives, order 2      & 4.35  & 2.81 & 15.75 & 1.87 & 0.107  & 26$\times$ \\
+$K$, $H$, $\kappa_1$, $\kappa_2$ (shared helper) & 100.0 & 3.00 & 22.5 & 1.91 & n/a & -- \\
+$31\times31$ torus mesh with normals & -- & 1.26\,s & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}

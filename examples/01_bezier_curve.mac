@@ -1,0 +1,51 @@
+/* ==========================================================================
+   Example 01 (basic) -- Bezier curves, polynomial and rational
+   wxMaxima:  batch("C:/path/NURBS-Maxima/examples/01_bezier_curve.mac")$
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+
+/* 1. Planar cubic Bezier curve with 4 control points */
+P : [[0,0], [1,2], [3,3], [4,0]]$
+B : nurbs_bezier_curve(P)$
+nurbs_info(B)$
+
+/* Exact polynomial expression and comparison with the Bernstein form */
+expr : nurbs_curve_span_expr(B, 3, t);
+bern : expand(sum(bernstein(i, 3, t) * P[i+1], i, 0, 3));
+print("Equal to the Bernstein form:", is(ratsimp(expr - bern) = [0, 0]))$
+
+/* 2. Point, derivatives, tangent and curvature at t = 1/2 (exact) */
+D : nurbs_curve_derivs(B, 1/2, 2);
+print("Unit tangent at t = 1/2:", nurbs_curve_tangent(B, 1/2))$
+print("Curvature at t = 1/2:", ratsimp(nurbs_curve_curvature(B, 1/2)), "=",
+      float(nurbs_curve_curvature(B, 1/2)))$
+print("Arc length:", nurbs_curve_length(B))$
+
+/* 3. End-point properties: C(0) = P0, C(1) = P3, C'(0) = 3 (P1 - P0) */
+print("C(0), C(1):", nurbs_curve_point(B, 0), nurbs_curve_point(B, 1))$
+print("C'(0) = 3 (P1 - P0):", is(nurbs_curve_derivs(B, 0, 1)[2] = 3 * (P[2] - P[1])))$
+
+/* 4. Quadratic rational Bezier: the middle weight w selects the conic
+      w < 1 ellipse, w = 1 parabola, w > 1 hyperbola                     */
+Q : [[0,0], [1,1], [2,0]]$
+conics : map(lambda([w], nurbs_bezier_curve(Q, [1, w, 1])), [1/2, 1, 2])$
+for w in [1/2, 1, 2] do
+  print("w =", w, " midpoint C(1/2) =", nurbs_curve_point(nurbs_bezier_curve(Q, [1, w, 1]), 1/2))$
+print("Rational expression for w = 1/2:", nurbs_curve_span_expr(first(conics), 2, t))$
+
+/* 5. De Casteljau subdivision through knot insertion */
+[B1, B2] : nurbs_curve_split(B, 1/2)$
+print("Left half control points :", B1@ctrlpts)$
+print("Right half control points:", B2@ctrlpts)$
+
+/* 6. Degree elevation: same curve, one more control point */
+B4 : nurbs_curve_elevate_degree(B, 1)$
+print("Degree 4 control points:", B4@ctrlpts)$
+print("Same curve:", is(ratsimp(nurbs_curve_span_expr(B4, 4, t) - expr) = [0, 0]))$
+
+/* 7. Plots */
+if nurbs_show_plots then nurbs_plot(B)$
+if nurbs_show_plots then nurbs_plot(conics, control = false)$
+nurbs_export_plot(B, sconcat(dir, "01_bezier_curve.png"))$
+print("Image saved to", sconcat(dir, "01_bezier_curve.png"))$

@@ -1,0 +1,71 @@
+/* ==========================================================================
+   NURBS-Maxima -- benchmarks
+       maxima -b tests/benchmark.mac          (writes tests/benchmark_maxima.csv)
+       python3 tests/benchmark_geomdl.py      (adds geomdl, writes docs/benchmarks.md)
+
+   Mean wall-clock time per call for the same objects in four modes:
+     exact   rational parameters, exact data (sqrt(2) weights kept symbolic)
+     float   nurbs_float(obj) and double-float parameters
+     bfloat  nurbs_bfloat(obj) with fpprec = 32
+     float+compile  as "float" after nurbs_compile()
+   ========================================================================== */
+bm_dir : pathname_directory(load_pathname)$
+load(sconcat(bm_dir, "../nurbs_maxima.mac"))$
+
+/* repeats the argument list until at least 1 s has elapsed */
+bm_time(bm_fun, bm_args) := block([t0: elapsed_real_time(), n: 0],
+  while elapsed_real_time() - t0 < 1.0 do (
+    for bm_a in bm_args do apply(bm_fun, bm_a), n: n + length(bm_args)),
+  1000.0 * (elapsed_real_time() - t0) / n)$
+
+C : nurbs_circle(1)$  T : nurbs_torus(2, 1/2)$
+Cf : nurbs_float(C)$  Tf : nurbs_float(T)$
+fpprec : 32$
+Cb : nurbs_bfloat(C)$ Tb : nurbs_bfloat(T)$
+
+ex1 : makelist([k/97], k, 1, 40)$
+ex2 : makelist([k/97, mod(3*k, 97)/97], k, 1, 20)$
+fl1 : float(ex1)$ fl2 : float(ex2)$
+bf1 : bfloat(ex1)$ bf2 : bfloat(ex2)$
+
+ops : [["curve point (circle)",       lambda([o, u], nurbs_curve_point(o, u)),          C, Cf, Cb, 1],
+       ["curve derivatives d=2",      lambda([o, u], nurbs_curve_derivs(o, u, 2)),      C, Cf, Cb, 1],
+       ["surface point (torus)",      lambda([o, u, v], nurbs_surface_point(o, u, v)),  T, Tf, Tb, 2],
+       ["surface derivatives d=2",    lambda([o, u, v], nurbs_surface_derivs(o, u, v, 2)), T, Tf, Tb, 2],
+       ["curvatures K H k1 k2 (geometry helper)", lambda([o, u, v], nurbs_surface_geometry(o, u, v)), T, Tf, Tb, 2]]$
+
+bm_run(op, mode) := block([bm_f: op[2], o, a],
+  o: if mode = 'exact then op[3] elseif mode = 'float then op[4] else op[5],
+  a: if op[6] = 1 then (if mode = 'exact then ex1 elseif mode = 'float then fl1 else bf1)
+     else (if mode = 'exact then ex2 elseif mode = 'float then fl2 else bf2),
+  /* exact surface evaluations are slow: use 5 samples */
+  if mode = 'exact and op[6] = 2 then a: firstn(a, 5),
+  bm_time(lambda([[x]], apply(bm_f, cons(o, x))), a))$
+
+res : map(lambda([op], [op[1], bm_run(op, 'exact), bm_run(op, 'float), bm_run(op, 'bfloat)]), ops)$
+
+/* compiled kernels */
+nurbs_compile()$
+resc : map(lambda([op], bm_run(op, 'float)), ops)$
+
+/* the compiled package still gives the same results */
+chk : [lmax(map(abs, nurbs_curve_point(Cf, 0.3) - [-0.2938119377115878, 0.9558632461069743])),
+       abs(nurbs_gaussian_curvature(Tf, 0.1, 0.0) - 0.8),
+       ratsimp(nurbs_curve_point(C, 1/8) - [1/sqrt(2), 1/sqrt(2)], algebraic),
+       block([P: nurbs_curve_point(C, bfloat(3/10))], P . P - 1)]$
+printf(true, "~%Check after compile (float errors, exact residual, bfloat residual): ~a~%", chk)$
+
+mesh_t0 : elapsed_real_time()$ nurbs_surface_mesh(T, 30, 30)$ mesh_t : elapsed_real_time() - mesh_t0$
+
+s : openw(sconcat(bm_dir, "benchmark_maxima.csv"))$
+printf(s, "operation,exact_ms,float_ms,bfloat32_ms,float_compiled_ms~%")$
+for k:1 thru length(res) do
+  printf(s, "~a,~,4f,~,4f,~,4f,~,4f~%", res[k][1], res[k][2], res[k][3], res[k][4], resc[k])$
+printf(s, "mesh 31x31 with normals (torus) [s],,~,4f,,~%", mesh_t)$
+close(s)$
+
+printf(true, "~%~35a ~10a ~10a ~10a ~10a~%", "operation (ms per call)", "exact", "float", "bfloat32", "compiled")$
+for k:1 thru length(res) do
+  printf(true, "~35a ~10,3f ~10,3f ~10,3f ~10,3f~%", res[k][1], res[k][2], res[k][3], res[k][4], resc[k])$
+printf(true, "mesh 31x31 (torus, float): ~,2f s~%", mesh_t)$
+block([b: build_info()], printf(true, "Maxima ~a, ~a ~a~%", b@version, b@lisp_name, b@lisp_version))$

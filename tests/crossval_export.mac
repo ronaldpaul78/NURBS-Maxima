@@ -1,0 +1,97 @@
+/* ==========================================================================
+   NURBS-Maxima -- cross-validation, step 1 (Maxima side)
+
+   Exports every test object with nurbs_export_json() (geomdl JSON format)
+   together with the values computed by NURBS-Maxima (points, first and
+   second derivatives, unit normals, and the results of the modelling
+   operations).  Step 2 (tests/crossval_geomdl.py) re-imports the objects
+   in geomdl, recomputes everything independently and reports the maximum
+   absolute error.
+
+   Run from the NURBS-Maxima folder:
+       maxima -b tests/crossval_export.mac
+       python3 tests/crossval_geomdl.py
+   ========================================================================== */
+
+cv_dir : pathname_directory(load_pathname)$
+load(sconcat(cv_dir, "../nurbs_maxima.mac"))$
+cv_out : sconcat(cv_dir, "crossval/")$
+
+cv_json(L) := if listp(L) then nurbs__json_list(L) else printf(false, "~,17e", float(L))$
+
+/* Curve case: object + values at the parameters ts */
+cv_curve(name, C, ts) := block([Cf: nurbs_float(C), s, D],
+  nurbs_export_json(C, sconcat(cv_out, name, ".json")),
+  D: map(lambda([t], nurbs_curve_derivs(Cf, t, 2)), ts),
+  s: openw(sconcat(cv_out, name, "_maxima.json")),
+  printf(s, "{\"kind\": \"curve\", \"params\": ~a, \"derivs\": ~a}~%", cv_json(ts), cv_json(D)),
+  close(s), name)$
+
+/* Surface case: object + values at the parameter pairs uvs */
+cv_surface(name, S, uvs) := block([Sf: nurbs_float(S), s, D, N],
+  nurbs_export_json(S, sconcat(cv_out, name, ".json")),
+  D: map(lambda([q], block([M: nurbs_surface_derivs(Sf, q[1], q[2], 2)],
+            [M[1,1], M[2,1], M[1,2], M[3,1], M[2,2], M[1,3]])), uvs),
+  N: map(lambda([q], nurbs_surface_normal(Sf, q[1], q[2])), uvs),
+  s: openw(sconcat(cv_out, name, "_maxima.json")),
+  printf(s, "{\"kind\": \"surface\", \"params\": ~a, \"derivs\": ~a, \"normals\": ~a}~%",
+         cv_json(uvs), cv_json(D), cv_json(N)),
+  close(s), name)$
+
+ts  : [0.0, 0.07, 0.13, 0.25, 0.31, 0.5, 0.61, 0.75, 0.88, 0.97, 1.0]$
+uvs : [[0.1, 0.2], [0.3, 0.7], [0.5, 0.5], [0.77, 0.41], [0.95, 0.05], [0.13, 0.88], [0.6, 0.33]]$
+
+bsU : [0, 0, 0, 0, 1/3, 2/3, 1, 1, 1, 1]$
+bsP : [[0,0,0],[1,2,1],[2,-1,2],[4,1,0],[5,3,1],[7,0,2]]$
+crat : nurbs_curve(3, bsU, bsP, [1, 2, 1/2, 1, 3, 1])$
+
+cv_curve("c_bezier",    nurbs_bezier_curve([[0,0],[1,2],[3,3],[4,0]]), ts)$
+cv_curve("c_circle",    nurbs_circle(1), ts)$
+cv_curve("c_bspline3d", bspline_curve(3, bsU, bsP), ts)$
+cv_curve("c_rational",  crat, ts)$
+cv_curve("c_interp",    nurbs_interpolate_curve([[0,0],[1,2],[3,3],[4,1],[6,2],[7,0]], 3), ts)$
+/* results of modelling operations performed by Maxima */
+cv_curve("c_rational_elevated", nurbs_curve_elevate_degree(crat, 2), ts)$
+cv_curve("c_circle_elevated",   nurbs_curve_elevate_degree(nurbs_circle(1), 1), ts)$
+cv_curve("c_rational_refined",  nurbs_curve_refine(crat, [0.2, 0.5, 0.5, 0.9]), ts)$
+cv_curve("c_rational_inserted", nurbs_curve_insert_knot(crat, 0.4, 2), ts)$
+
+bezP : [[[0,0,0],[0,1,1],[0,2,0],[0,3,1]], [[1,0,1],[1,1,2],[1,2,1],[1,3,0]],
+        [[2,0,0],[2,1,-1],[2,2,2],[2,3,1]], [[3,0,1],[3,1,0],[3,2,1],[3,3,0]]]$
+tor : nurbs_torus(2, 1/2)$
+cv_surface("s_bezier",   nurbs_bezier_surface(bezP), uvs)$
+cv_surface("s_torus",    tor, uvs)$
+cv_surface("s_sphere",   nurbs_sphere(1), uvs)$
+cv_surface("s_cylinder", nurbs_cylinder(1, 2), uvs)$
+cv_surface("s_torus_inserted_u", nurbs_surface_insert_knot(tor, 'u, 0.3, 1), uvs)$
+cv_surface("s_torus_refined_v",  nurbs_surface_refine(tor, 'v, [0.1, 0.6]), uvs)$
+cv_surface("s_torus_elevated_v", nurbs_surface_elevate_degree(tor, 'v, 1), uvs)$
+
+/* Bezier decomposition: number of segments/patches + first segment */
+block([B: nurbs_curve_decompose(crat), s],
+  s: openw(sconcat(cv_out, "op_decompose_curve.json")),
+  printf(s, "{\"count\": ~d, \"ctrlpts\": ~a, \"weights\": ~a}~%", length(B),
+         cv_json(map(lambda([b], b@ctrlpts), B)), cv_json(map(lambda([b], b@weights), B))),
+  close(s))$
+block([Bs: nurbs_surface_decompose(tor), s],
+  s: openw(sconcat(cv_out, "op_decompose_surface.json")),
+  printf(s, "{\"count\": ~d}~%", length(Bs) * length(first(Bs))),
+  close(s))$
+
+/* Degree elevation, compared through the (unique) Bezier form of the result */
+block([B: nurbs_curve_decompose(nurbs_curve_elevate_degree(crat, 2)), s],
+  s: openw(sconcat(cv_out, "op_elevate_bezier.json")),
+  printf(s, "{\"ctrlptsw\": ~a}~%", cv_json(map(nurbs_curve_ctrlptsw, B))),
+  close(s))$
+
+/* Operation outputs as control data (compared with geomdl's own operations) */
+block([s, E: nurbs_curve_elevate_degree(crat, 2), R: nurbs_curve_refine(crat, [0.2, 0.5, 0.5, 0.9]),
+       I: nurbs_curve_insert_knot(crat, 0.4, 2), Ti: nurbs_surface_insert_knot(tor, 'u, 0.3, 1)],
+  s: openw(sconcat(cv_out, "op_results.json")),
+  printf(s, "{\"elevate_knots\": ~a, \"elevate_ctrlptsw\": ~a, \"refine_knots\": ~a, \"refine_ctrlptsw\": ~a, \"insert_knots\": ~a, \"insert_ctrlptsw\": ~a, \"surf_insert_knots_u\": ~a, \"surf_insert_ctrlptsw\": ~a}~%",
+    cv_json(E@knots), cv_json(nurbs_curve_ctrlptsw(E)), cv_json(R@knots), cv_json(nurbs_curve_ctrlptsw(R)),
+    cv_json(I@knots), cv_json(nurbs_curve_ctrlptsw(I)), cv_json(Ti@knots_u),
+    cv_json(apply(append, nurbs_surface_ctrlptsw(Ti)))),
+  close(s))$
+
+printf(true, "Cross-validation data written to ~a~%", cv_out)$

@@ -1,0 +1,838 @@
+/* [wxMaxima batch file version 1] [ DO NOT EDIT BY HAND! ]*/
+/* [ Created with wxMaxima version 22.04.0 ] */
+/* [wxMaxima: title   start ]
+Cómo está programado NURBS-Maxima
+Guía paso a paso del código del paquete
+   [wxMaxima: title   end   ] */
+
+/* [wxMaxima: comment start ]
+Este cuaderno explica, celda por celda, cómo está escrito el paquete nurbs_maxima.mac.
+El código de las celdas es exactamente el del paquete, copiado tal cual, para que pueda ejecutarlo
+y modificarlo aquí mismo sin cargar nada.
+
+Cómo usarlo: ejecute las celdas en orden, de arriba abajo, con Mayús+Enter en cada una,
+o todas a la vez con el menú Celda > Evaluar todas las celdas.
+
+Contenido:
+  0. Lo mínimo de la programación en Maxima que usa el paquete
+  1. Etapa 1: vectores de nudos y funciones base B-spline
+  2. Etapa 2: curvas NURBS (estructura, coordenadas homogéneas, evaluación, derivadas, transformaciones)
+  3. Etapa 3: superficies NURBS (evaluación por producto tensorial, toro por revolución)
+  4. Etapa 4: geometría diferencial (formas fundamentales, K y H)
+  5. Etapa 5: visualización con draw
+  6. Etapa 6: cómo están hechas las pruebas
+  7. Cargar el paquete completo
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: section start ]
+0. Programación en Maxima: lo que usa el paquete
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+Un archivo .mac (como nurbs_maxima.mac) es solo una lista de instrucciones de Maxima, las mismas que
+se escriben en una celda de wxMaxima. Al hacer load("nurbs_maxima.mac") Maxima las ejecuta todas y
+quedan definidas las funciones. No hay compilación ni un formato especial de "paquete".
+
+Reglas básicas:
+  - f(x) := expresión   define una función.
+  - Una instrucción termina en ";" (muestra el resultado) o en "$" (lo oculta).
+    En el paquete todo termina en $ para que al cargarlo no se imprima nada.
+  - a : 5   asigna una variable. El signo "=" NO asigna: es una ecuación o una comparación.
+  - Las listas se escriben [a, b, c] y se numeran desde 1: L[1] es el primer elemento.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+f(x) := x^2 + 1$
+f(3);
+L : [10, 20, 30]$
+L[1];
+L[2] : 99$   /* las listas se pueden modificar elemento a elemento */
+L;
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Funciones de varias líneas: block([variables locales], instr1, instr2, ..., resultado)
+  - Las variables de la lista son locales: no afectan a las variables del usuario.
+  - Se pueden dar valores iniciales: block([s: 0], ...).
+  - El valor devuelto es el de la última instrucción, o el que se pase a return(...).
+
+Bucles y condiciones:
+  - for j:0 thru p do (instr1, instr2)     j toma los valores 0, 1, ..., p
+  - for x in L do ...                      recorre una lista
+  - while condición do ...
+  - if condición then a elseif otra then b else c
+  - Los paréntesis ( ... , ... ) agrupan varias instrucciones separadas por comas.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+suma_cuadrados(n) := block([s: 0],
+  for k:1 thru n do s: s + k^2,
+  s)$
+suma_cuadrados(10);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Otras piezas que usa el paquete:
+  - makelist(expr, k, a, b)       construye la lista [expr(a), ..., expr(b)].
+  - map(f, L)                     aplica f a cada elemento de L.
+  - lambda([x], expr)             función anónima, sin nombre.
+  - zeromatrix(m, n), M[i, j]     matrices, también numeradas desde 1.
+  - Operaciones con listas: [1,2,3] + [4,5,6] suma componente a componente, 2*[1,2] = [2,4]
+    y [1,2,3] . [4,5,6] es el producto escalar. Por eso un punto [x,y,z] se trata como un vector.
+  - error("mensaje")              detiene el cálculo con un mensaje.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+makelist(k^2, k, 0, 4);
+map(lambda([x], 2*x), [1, 2, 3]);
+[1, 2, 3] + [4, 5, 6];
+[1, 2, 3] . [4, 5, 6];
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Estructuras (defstruct): es la forma en que el paquete agrupa los datos de una curva.
+  defstruct(nombre(campo1, campo2, ...)) declara la plantilla,
+  new(nombre(v1, v2, ...)) crea un objeto y
+  obj@campo lee un campo.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+defstruct(punto3(x, y, z))$
+q : new(punto3(1, 2, 3));
+q@y;
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Convención de nombres del paquete:
+  - nurbs_...   funciones públicas, documentadas en docs/API.md.
+  - nurbs__...  (doble guion bajo) funciones auxiliares internas.
+  - knots_..., params_..., bspline_...   vectores de nudos, parametrización y bases.
+
+Convención de índices: en los libros (Piegl y Tiller, The NURBS Book) los índices empiezan en 0:
+P_0, ..., P_n y U_0, ..., U_m. En Maxima las listas empiezan en 1. Por eso en el código aparece
+siempre "+1": el nudo U_k del libro es U[k+1] en Maxima y el punto P_i es P[i+1].
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+/* Utilidades internas del paquete que se usan en las celdas siguientes */
+nurbs_tol : 1.0e-10$
+nurbs__kind(x) := block([k: false],
+  if bfloatp(x) then return('bfloat),
+  if floatnump(x) then return('float),
+  if atom(x) then return(false),
+  for e in args(x) do block([ke: nurbs__kind(e)],
+    if ke = 'bfloat then k: 'bfloat
+    elseif ke = 'float and k = false then k: 'float),
+  k)$
+nurbs__has_float(x) := is(nurbs__kind(x) # false)$
+nurbs__num(x) := if nurbs__kind(x) = 'bfloat then bfloat(x) else float(x)$
+nurbs__finish(r, t) := block([k: nurbs__kind(t)],
+  if k = 'bfloat then bfloat(r) elseif k = 'float then float(r) else r)$
+nurbs__zero(x) := block([r],
+  r: if numberp(x) and not nurbs__has_float(x) then is(x = 0)
+     elseif nurbs__has_float(x) then is(abs(x) <= nurbs_tol)
+     elseif constantp(x) then is(radcan(x) = 0)
+     else is(ratsimp(x) = 0),
+  is(r = true))$
+nurbs__negative(x) := block([y: nurbs__num(x)], is(numberp(y) and y < 0))$
+nurbs__norm(v) := sqrt(v . v)$
+nurbs__pad3(v) := if length(v) = 2 then [v[1], v[2], 0] else v$
+nurbs__cross(a, b) := block([x: nurbs__pad3(a), y: nurbs__pad3(b)],
+  [x[2]*y[3] - x[3]*y[2], x[3]*y[1] - x[1]*y[3], x[1]*y[2] - x[2]*y[1]])$
+nurbs__unit(v) := block([n: nurbs__norm(v)],
+  if nurbs__zero(n) then und else v / n)$
+nurbs__zerovec(n) := makelist(0, k, 1, n)$
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+nurbs__finish(x, t) es la clave de que el paquete trabaje igual en exacto, en decimal y en
+precisión arbitraria: nurbs__kind(t) mira de qué tipo es el parámetro t. Si t es un bigfloat
+(por ejemplo bfloat(1/3) con fpprec : 50) el resultado se convierte a bigfloat; si t es decimal
+(float) se convierte a decimal; si t es exacto (1/8, por ejemplo) se deja exacto, con raíces y
+fracciones. Así el mismo código sirve para cuatro aritméticas: exacta, simbólica (pesos w),
+doble precisión y bigfloat.
+
+Tolerancia única: nurbs_tol (1e-10 por defecto) es la única tolerancia del paquete.
+nurbs__zero(x) decide si x es cero en tres casos, y siempre devuelve true o false:
+  - x decimal o bigfloat:   |x| <= nurbs_tol   (el redondeo ~1e-16 cuenta como cero);
+  - x constante exacta:     radcan(x) = 0      (simplifica raíces, como sqrt(2)^2 - 2);
+  - x expresión simbólica:  ratsimp(x) = 0     (por ejemplo con un peso w).
+Los mensajes de error del paquete están en inglés, pensando en la publicación internacional;
+este cuaderno se mantiene en español como material didáctico.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs__zero(1.0e-17);
+nurbs__zero(sqrt(2)^2 - 2);
+nurbs__zero((w + 1)^2 - w^2 - 2*w - 1);
+nurbs__kind([1/2, 0.5]);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+1. Etapa 1: núcleo matemático
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: subsect start ]
+1.1 Vectores de nudos
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Un vector de nudos U es una lista no decreciente. Para n puntos de control y grado p debe tener
+n + p + 1 valores. El vector "abierto" (clamped) repite p+1 veces el 0 y el 1, de modo que la curva
+pasa por el primer y el último punto de control.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+knots_clamped_uniform(n, p) := block(
+  if n < p + 1 then error("knots_clamped_uniform: at least p+1 control points are required"),
+  append(makelist(0, k, 1, p + 1),
+         makelist(j / (n - p), j, 1, n - p - 1),
+         makelist(1, k, 1, p + 1)))$
+knots_domain_spans(U, p) :=
+  sublist(knots_spans(U), lambda([s], s[1] >= p and s[1] <= length(U) - p - 2))$
+knots_bezier(p) := append(makelist(0, k, 1, p + 1), makelist(1, k, 1, p + 1))$
+knots_multiplicity(u, U) := length(sublist(U, lambda([x], nurbs__zero(x - u))))$
+knots_unique(U) := block([r: [first(U)]],
+  for x in rest(U) do if not nurbs__zero(x - last(r)) then r: endcons(x, r),
+  r)$
+knots_spans(U) := block([r: []],
+  for i:0 thru length(U) - 2 do
+    if not nurbs__zero(U[i + 2] - U[i + 1]) then r: endcons([i, U[i + 1], U[i + 2]], r),
+  r)$
+knots_clamped_uniform(6, 3);
+knots_spans([0,0,0,1,2,3,4,4,5,5,5]);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+knots_validate comprueba los datos antes de construir una curva y explica el error si algo
+está mal: longitud incorrecta, nudos que decrecen o multiplicidad excesiva.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+knots_validate(U, p, n) := block([m],
+  if not listp(U) then error("knots_validate: the knot vector must be a list"),
+  if not integerp(p) or p < 1 then error("knots_validate: the degree must be an integer >= 1"),
+  m: length(U),
+  if m # n + p + 1 then
+    error("knots_validate: expected", n + p + 1, "knots (n+p+1) but got", m),
+  for k:1 thru m - 1 do
+    if nurbs__negative(U[k + 1] - U[k]) then
+      error("knots_validate: the knot vector decreases at position", k),
+  for x in knots_unique(U) do
+    if knots_multiplicity(x, U) > p + 1 then
+      error("knots_validate: multiplicity greater than p+1 at u =", x),
+  true)$
+knots_validate([0,0,0,1,1,1], 2, 3);
+errcatch(knots_validate([0,0,1,1], 2, 3));   /* errcatch captura el error: devuelve [] */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+1.2 Búsqueda del tramo (Algoritmo A2.1)
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Para evaluar en un parámetro u primero hay que saber en qué intervalo [U_i, U_{i+1}) cae.
+Se hace por búsqueda binaria (bisección): low y high acotan el intervalo y mid es el punto medio.
+  - n = número de puntos de control - 1.
+  - Los dos primeros "if" tratan los extremos del dominio.
+  - El índice devuelto (i) sigue la convención del libro, desde 0.
+Nota: U[mid+1] es el nudo U_mid del libro.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_find_span(n, p, u, U) := block([low, high, mid],
+  if is(u >= U[n + 2]) then return(n),
+  if is(u <= U[p + 1]) then return(p),
+  low: p, high: n + 1, mid: floor((low + high) / 2),
+  while is(u < U[mid + 1] or u >= U[mid + 2]) do (
+    if is(u < U[mid + 1]) then high: mid else low: mid,
+    mid: floor((low + high) / 2)),
+  mid)$
+U1 : [0,0,0,1,2,3,4,4,5,5,5]$
+nurbs_find_span(7, 2, 5/2, U1);   /* el libro da 4 (ejemplo 2.3) */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+1.3 Recurrencia de Cox-de Boor
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Esta es la definición matemática directa de las funciones base, programada de forma recursiva:
+  N_{i,0}(u) = 1 si U_i <= u < U_{i+1}, y 0 en otro caso
+  N_{i,p}(u) = (u-U_i)/(U_{i+p}-U_i) N_{i,p-1}(u) + (U_{i+p+1}-u)/(U_{i+p+1}-U_{i+1}) N_{i+1,p-1}(u)
+Cuando un denominador es 0 el término correspondiente se toma como 0 (convenio 0/0 = 0).
+El segundo "elseif" del caso p = 0 hace que la base valga 1 en el último nudo, para que la curva
+termine exactamente en el último punto de control.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+bspline_basis(i, p, u, U) := block([m: length(U), a, b],
+  if p = 0 then (
+    if is(U[i + 1] <= u and u < U[i + 2]) then 1
+    elseif nurbs__zero(u - U[m]) and nurbs__zero(U[i + 2] - U[m])
+           and is(U[i + 1] < U[i + 2]) then 1
+    else 0)
+  else (
+    a: if nurbs__zero(U[i + p + 1] - U[i + 1]) then 0
+       else (u - U[i + 1]) / (U[i + p + 1] - U[i + 1]) * bspline_basis(i, p - 1, u, U),
+    b: if nurbs__zero(U[i + p + 2] - U[i + 2]) then 0
+       else (U[i + p + 2] - u) / (U[i + p + 2] - U[i + 2]) * bspline_basis(i + 1, p - 1, u, U),
+    a + b))$
+makelist(bspline_basis(i, 2, 5/2, U1), i, 0, 7);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+La versión recursiva es clara pero lenta, porque repite muchos cálculos. El paquete la conserva
+como referencia. Para evaluar curvas usa el algoritmo A2.2, que calcula de una vez las p+1
+funciones no nulas.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: subsect start ]
+1.4 Funciones base no nulas (Algoritmo A2.2)
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+En el tramo i solo son distintas de cero N_{i-p,p}, ..., N_{i,p}. El algoritmo las construye
+grado a grado, desde N = [1] (grado 0) hasta grado p, reutilizando los valores ya calculados
+(tipo triángulo de De Boor).
+  - left[j]  = u - U_{i+1-j}   y   right[j] = U_{i+j} - u.
+  - N[r+1] es N_{i-p+r} del libro: de nuevo el desplazamiento de +1.
+Como solo hace sumas, restas, productos y divisiones, funciona también con u SIMBÓLICO:
+devuelve entonces los polinomios exactos de cada tramo.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_basis_funs(i, u, p, U) := block([N, left, right, saved, temp],
+  N: makelist(0, k, 0, p), N[1]: 1,
+  left: makelist(0, k, 0, p), right: makelist(0, k, 0, p),
+  for j:1 thru p do (
+    left[j + 1]: u - U[i + 2 - j],
+    right[j + 1]: U[i + j + 1] - u,
+    saved: 0,
+    for r:0 thru j - 1 do (
+      temp: N[r + 1] / (right[r + 2] + left[j - r + 1]),
+      N[r + 1]: saved + right[r + 2] * temp,
+      saved: left[j - r + 1] * temp),
+    N[j + 1]: saved),
+  N)$
+nurbs_basis_funs(4, 5/2, 2, U1);           /* exacto: [1/8, 3/4, 1/8] */
+expand(nurbs_basis_funs(4, u, 2, U1));     /* polinomios del tramo [2,3) */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+1.5 Derivadas de las bases (Algoritmo A2.3)
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Devuelve una matriz D con D[k+1, j+1] = derivada k-ésima de N_{i-p+j,p}(u).
+  - Primero guarda en la matriz ndu todas las bases de grados 0..p y las diferencias de nudos.
+  - Después combina esos valores con los coeficientes a[k, j] de la fórmula de derivación de B-splines.
+  - Por último multiplica por p, p(p-1), ... (los factores de la derivada).
+[s1, s2] : [s2, s1] intercambia dos variables en una sola instrucción.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_ders_basis_funs(i, u, p, n, U) := block(
+  [ndu, a, ders, left, right, saved, temp, s1, s2, d, rk, pk, j1, j2, rr, nn],
+  nn: min(n, p),
+  ndu: zeromatrix(p + 1, p + 1), ndu[1, 1]: 1,
+  left: makelist(0, k, 0, p), right: makelist(0, k, 0, p),
+  for j:1 thru p do (
+    left[j + 1]: u - U[i + 2 - j],
+    right[j + 1]: U[i + j + 1] - u,
+    saved: 0,
+    for r:0 thru j - 1 do (
+      ndu[j + 1, r + 1]: right[r + 2] + left[j - r + 1],
+      temp: ndu[r + 1, j] / ndu[j + 1, r + 1],
+      ndu[r + 1, j + 1]: saved + right[r + 2] * temp,
+      saved: left[j - r + 1] * temp),
+    ndu[j + 1, j + 1]: saved),
+  ders: zeromatrix(n + 1, p + 1),
+  for j:0 thru p do ders[1, j + 1]: ndu[j + 1, p + 1],
+  a: zeromatrix(2, p + 1),
+  for r:0 thru p do (
+    s1: 0, s2: 1, a[1, 1]: 1,
+    for k:1 thru nn do (
+      d: 0, rk: r - k, pk: p - k,
+      if r >= k then (
+        a[s2 + 1, 1]: a[s1 + 1, 1] / ndu[pk + 2, rk + 1],
+        d: a[s2 + 1, 1] * ndu[rk + 1, pk + 1]),
+      j1: if rk >= -1 then 1 else -rk,
+      j2: if r - 1 <= pk then k - 1 else p - r,
+      for j:j1 thru j2 do (
+        a[s2 + 1, j + 1]: (a[s1 + 1, j + 1] - a[s1 + 1, j]) / ndu[pk + 2, rk + j + 1],
+        d: d + a[s2 + 1, j + 1] * ndu[rk + j + 1, pk + 1]),
+      if r <= pk then (
+        a[s2 + 1, k + 1]: -a[s1 + 1, k] / ndu[pk + 2, r + 1],
+        d: d + a[s2 + 1, k + 1] * ndu[r + 1, pk + 1]),
+      ders[k + 1, r + 1]: d,
+      [s1, s2]: [s2, s1])),
+  rr: p,
+  for k:1 thru nn do (
+    for j:0 thru p do ders[k + 1, j + 1]: ders[k + 1, j + 1] * rr,
+    rr: rr * (p - k)),
+  ders)$
+nurbs_ders_basis_funs(4, 5/2, 2, 2, U1);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+bspline_basis_all(p, u, U) := block([n: length(U) - p - 1, span, N, r],
+  span: nurbs_find_span(n - 1, p, u, U),
+  N: nurbs_basis_funs(span, u, p, U),
+  r: makelist(0, k, 1, n),
+  for j:0 thru p do r[span - p + j + 1]: N[j + 1],
+  nurbs__finish(r, u))$
+bernstein(i, n, t) := binomial(n, i) * t^i * (1 - t)^(n - i)$
+bspline_basis_all(2, 5/2, U1);
+apply("+", %);   /* partición de la unidad: siempre suman 1 */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+2. Etapa 2: curvas NURBS
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: subsect start ]
+2.1 La estructura de datos
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Una curva NURBS queda definida por 4 datos: grado p, vector de nudos U, puntos de control P y pesos W.
+El paquete los guarda en una estructura nurbscrv. La función constructora nurbs_curve valida
+todo (con knots_validate y la positividad de los pesos) antes de crear el objeto. Los pesos
+pueden ser símbolos (por ejemplo w); solo se comprueba el signo de los pesos numéricos.
+El argumento [W] entre corchetes significa "opcional": si no se da, W = [] y se usan pesos 1.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+defstruct(nurbscrv(degree, knots, ctrlpts, weights))$
+nurbs_curve_p(c) := is(not atom(c) and op(c) = 'nurbscrv)$
+nurbs_curve(p, U, P, [W]) := block([n: length(P), w],
+  w: if W = [] then makelist(1, k, 1, n) else first(W),
+  if length(w) # n then error("nurbs_curve: number of weights differs from number of control points"),
+  for X in P do if length(X) # length(first(P)) then
+    error("nurbs_curve: all control points must have the same dimension"),
+  knots_validate(U, p, n),
+  for x in w do
+    if constantp(x) and not nurbs__negative(-x) then
+      error("nurbs_curve: numeric weights must be positive; got", x),
+  new(nurbscrv(p, U, P, w)))$
+c : nurbs_curve(2, [0,0,0,1,1,1], [[0,0],[1,2],[2,0]]);
+c@degree;
+c@ctrlpts;
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+2.2 Coordenadas homogéneas
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+La idea central de las NURBS: una curva racional en R^3 es la proyección de una B-spline
+polinómica en R^4. Cada punto P con peso w se convierte en Pw = [w x, w y, w z, w].
+Se evalúa la B-spline "normal" con esos puntos y al final se divide entre la última coordenada.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs__hom(P, w) := append(w * P, [w])$
+nurbs__dehom(Pw) := rest(Pw, -1) / last(Pw)$
+nurbs__hom([1, 2], 3);
+nurbs__dehom([3, 6, 3]);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+2.3 Evaluar un punto (Algoritmo A4.1)
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Pasos:
+  1) span = tramo que contiene a u (A2.1).
+  2) N = las p+1 bases no nulas (A2.2).
+  3) Cw = suma de N_j por los puntos homogéneos P_{span-p+j}.
+  4) Dividir entre el peso (dehom) y, si u era decimal, convertir a decimal.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_curve_point(C, u) := block(
+  [p: C@degree, U: C@knots, P: C@ctrlpts, W: C@weights, n, span, N, Cw: 0, k],
+  n: length(P) - 1,
+  span: nurbs_find_span(n, p, u, U),
+  N: nurbs_basis_funs(span, u, p, U),
+  for j:0 thru p do (k: span - p + j + 1, Cw: Cw + N[j + 1] * nurbs__hom(P[k], W[k])),
+  nurbs__finish(nurbs__dehom(Cw), u))$
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Prueba con la circunferencia exacta: 9 puntos de control en los vértices y puntos medios de un
+cuadrado, con pesos 1 en los puntos sobre la circunferencia y sqrt(2)/2 en las esquinas.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_circle_3d(C, r, e1, e2) := block([s: sqrt(2)/2, dirs],
+  dirs: [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1],[1,0]],
+  nurbs_curve(2, [0,0,0,1/4,1/4,1/2,1/2,3/4,3/4,1,1,1],
+    map(lambda([d], C + r*d[1]*e1 + r*d[2]*e2), dirs),
+    [1, s, 1, s, 1, s, 1, s, 1]))$
+nurbs_circle(r, [C]) := block([c: if C = [] then [0, 0] else first(C)],
+  if length(c) = 2 then nurbs_circle_3d(c, r, [1, 0], [0, 1])
+  else nurbs_circle_3d(c, r, [1, 0, 0], [0, 1, 0]))$
+C : nurbs_circle(1)$
+nurbs_curve_point(C, 0.3);
+P8 : ratsimp(nurbs_curve_point(C, 1/8), algebraic);   /* exacto: (1+sqrt(2))/(2+sqrt(2)) = 1/sqrt(2) */
+ratsimp(P8 - [1/sqrt(2), 1/sqrt(2)], algebraic);   /* da [0, 0] */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+2.4 Derivadas de la curva racional (Algoritmo A4.2)
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Primero se derivan las coordenadas homogéneas, que son una B-spline polinómica, con la función
+auxiliar nurbs__curve_derivs_w. Después se aplica la regla de Leibniz al cociente:
+  C^(k) = ( A^(k) - suma_{i=1..k} binomial(k,i) w^(i) C^(k-i) ) / w
+donde A son las primeras coordenadas homogéneas y w la última.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs__curve_derivs_w(C, u, d) := block(
+  [p: C@degree, U: C@knots, P: C@ctrlpts, W: C@weights, n, span, du, nd, CK, Pw],
+  n: length(P) - 1, du: min(d, p),
+  span: nurbs_find_span(n, p, u, U),
+  nd: nurbs_ders_basis_funs(span, u, p, du, U),
+  Pw: makelist(nurbs__hom(P[span - p + j + 1], W[span - p + j + 1]), j, 0, p),
+  CK: makelist(nurbs__zerovec(length(P[1]) + 1), k, 0, d),
+  for k:0 thru du do
+    for j:0 thru p do CK[k + 1]: CK[k + 1] + nd[k + 1, j + 1] * Pw[j + 1],
+  CK)$
+nurbs_curve_derivs(C, u, d) := block([CKw, A, w, CK, v],
+  CKw: nurbs__curve_derivs_w(C, u, d),
+  A: map(lambda([x], rest(x, -1)), CKw),
+  w: map(last, CKw),
+  CK: makelist(0, k, 0, d),
+  for k:0 thru d do (
+    v: A[k + 1],
+    for i:1 thru k do v: v - binomial(k, i) * w[i + 1] * CK[k - i + 1],
+    CK[k + 1]: v / w[1]),
+  nurbs__finish(CK, u))$
+nurbs_curve_derivs(C, 0.3, 2);   /* [C, C', C''] */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+2.5 Expresión exacta por tramos
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Si en lugar de un número se pasa un símbolo t, el mismo algoritmo da la fórmula racional exacta
+del tramo. Con ella se comprueba simbólicamente que la circunferencia es exacta: x^2 + y^2 = 1.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs__check_span(i, p, U) :=
+  if i < p or i > length(U) - p - 2 or nurbs__zero(U[i + 2] - U[i + 1]) then
+    error("Span", i, "is empty or outside the domain; valid spans:",
+          map(first, knots_domain_spans(U, p)))$
+nurbs_curve_ctrlptsw(C) := map(nurbs__hom, C@ctrlpts, C@weights)$
+nurbs_curve_span_expr(C, i, t) := block(
+  [p: C@degree, U: C@knots, Pw: nurbs_curve_ctrlptsw(C), N, Cw: 0, algebraic: true],
+  nurbs__check_span(i, p, U),
+  N: nurbs_basis_funs(i, t, p, U),
+  for j:0 thru p do Cw: Cw + N[j + 1] * Pw[i - p + j + 1],
+  map(ratsimp, nurbs__dehom(Cw)))$
+e : nurbs_curve_span_expr(C, 2, t);
+ratsimp(e . e, algebraic);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: subsect start ]
+2.6 Transformaciones
+   [wxMaxima: subsect end   ] */
+
+/* [wxMaxima: comment start ]
+Las NURBS son invariantes ante transformaciones afines y proyectivas: transformar la curva es lo
+mismo que transformar sus puntos de control homogéneos. Por eso basta con una matriz 4x4 M y
+la función nurbs__transform_point. Rotar, trasladar o escalar son casos particulares de M.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_translation_matrix(t) := block([v: nurbs__pad3(t)],
+  matrix([1, 0, 0, v[1]], [0, 1, 0, v[2]], [0, 0, 1, v[3]], [0, 0, 0, 1]))$
+nurbs_scaling_matrix(s) := block([v: if listp(s) then nurbs__pad3(s) else [s, s, s]],
+  matrix([v[1], 0, 0, 0], [0, v[2], 0, 0], [0, 0, v[3], 0], [0, 0, 0, 1]))$
+nurbs_rotation_matrix(axis, th) := block([a, c: cos(th), s: sin(th), x, y, z, R],
+  a: if axis = 'x then [1, 0, 0] elseif axis = 'y then [0, 1, 0]
+     elseif axis = 'z then [0, 0, 1] else nurbs__unit(axis),
+  [x, y, z]: a,
+  R: matrix(
+    [c + x^2*(1 - c),   x*y*(1 - c) - z*s, x*z*(1 - c) + y*s],
+    [y*x*(1 - c) + z*s, c + y^2*(1 - c),   y*z*(1 - c) - x*s],
+    [z*x*(1 - c) - y*s, z*y*(1 - c) + x*s, c + z^2*(1 - c)]),
+  matrix(endcons(0, R[1]), endcons(0, R[2]), endcons(0, R[3]), [0, 0, 0, 1]))$
+nurbs__transform_point(M, P, w) := block([d: length(P), h, X],
+  h: nurbs__hom(nurbs__pad3(P), w),
+  X: list_matrix_entries(M . transpose(matrix(h))),
+  [ (if d = 2 then [X[1], X[2]] else [X[1], X[2], X[3]]) / X[4], X[4] ])$
+/* versión simplificada, solo para curvas, de nurbs_transform */
+transformar_curva(obj, M) := block([r],
+  r: map(lambda([P, w], nurbs__transform_point(M, P, w)), obj@ctrlpts, obj@weights),
+  nurbs_curve(obj@degree, obj@knots, map(first, r), map(second, r)))$
+E : transformar_curva(C, nurbs_scaling_matrix([2, 1, 1]))$   /* elipse */
+nurbs_curve_point(E, 0.0);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+3. Etapa 3: superficies NURBS
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+Una superficie es un producto tensorial: una red de puntos P[i][j] (filas en la dirección u,
+columnas en la dirección v), dos grados (p, q) y dos vectores de nudos (U, V).
+Para evaluar S(u,v):
+  1) se buscan los tramos en u y en v y sus bases Nu y Nv;
+  2) para cada columna l se combinan las p+1 filas con Nu (temp);
+  3) se combinan esos resultados con Nv.
+Es el Algoritmo A4.3. Las derivadas parciales (A4.4) siguen la misma idea con Leibniz en dos variables.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+defstruct(nurbssrf(degree_u, degree_v, knots_u, knots_v, ctrlpts, weights))$
+nurbs_surface_p(s) := is(not atom(s) and op(s) = 'nurbssrf)$
+nurbs_surface(p, q, U, V, P, [W]) := block([nu: length(P), nv: length(first(P)), w],
+  w: if W = [] then makelist(makelist(1, j, 1, nv), i, 1, nu) else first(W),
+  for row in P do if length(row) # nv then error("nurbs_surface: the control net is not rectangular"),
+  if length(w) # nu or length(first(w)) # nv then
+    error("nurbs_surface: the weight and control point arrays have different sizes"),
+  knots_validate(U, p, nu),
+  knots_validate(V, q, nv),
+  for x in flatten(w) do
+    if constantp(x) and not nurbs__negative(-x) then
+      error("nurbs_surface: numeric weights must be positive; got", x),
+  new(nurbssrf(p, q, U, V, P, w)))$
+nurbs_surface_point(S, u, v) := block(
+  [p: S@degree_u, q: S@degree_v, U: S@knots_u, V: S@knots_v,
+   P: S@ctrlpts, W: S@weights, n, m, us, vs, Nu, Nv, temp, Sw: 0, a, b],
+  n: length(P) - 1, m: length(first(P)) - 1,
+  us: nurbs_find_span(n, p, u, U), Nu: nurbs_basis_funs(us, u, p, U),
+  vs: nurbs_find_span(m, q, v, V), Nv: nurbs_basis_funs(vs, v, q, V),
+  for l:0 thru q do (
+    temp: 0, b: vs - q + l + 1,
+    for k:0 thru p do (a: us - p + k + 1, temp: temp + Nu[k + 1] * nurbs__hom(P[a][b], W[a][b])),
+    Sw: Sw + Nv[l + 1] * temp),
+  nurbs__finish(nurbs__dehom(Sw), [u, v]))$
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Superficie de revolución: cada punto del perfil (en el plano xz) se gira alrededor del eje z usando
+la misma circunferencia exacta de 9 puntos. Las esquinas del cuadrado (índices impares) son A + B,
+la suma de los dos puntos vecinos girados 90 grados. El peso es el producto del peso del giro por
+el del perfil. Un toro es la revolución de una circunferencia.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_line(A, B) := nurbs_curve(1, [0, 0, 1, 1], [A, B])$
+nurbs_revolve(C) := block([s: sqrt(2)/2, rot, prof: map(nurbs__pad3, C@ctrlpts), P, W],
+  rot(X, k) := block([x: X[1], y: X[2], z: X[3]],
+    if mod(k, 4) = 0 then [x, y, z] elseif mod(k, 4) = 1 then [-y, x, z]
+    elseif mod(k, 4) = 2 then [-x, -y, z] else [y, -x, z]),
+  P: makelist(
+       makelist(
+         if evenp(i) then rot(prof[j], i / 2)
+         else block([A: rot(prof[j], (i - 1) / 2), B: rot(prof[j], (i + 1) / 2)],
+                    [A[1] + B[1], A[2] + B[2], A[3]]),
+         j, 1, length(prof)),
+       i, 0, 8),
+  W: makelist(makelist((if evenp(i) then 1 else s) * C@weights[j], j, 1, length(prof)), i, 0, 8),
+  nurbs_surface(2, C@degree, [0, 0, 0, 1/4, 1/4, 1/2, 1/2, 3/4, 3/4, 1, 1, 1], C@knots, P, W))$
+nurbs_torus(R, r) := nurbs_revolve(nurbs_circle_3d([R, 0, 0], r, [1, 0, 0], [0, 0, 1]))$
+T : nurbs_torus(2, 1/2)$
+X : nurbs_surface_point(T, 0.1, 0.2);
+(sqrt(X[1]^2 + X[2]^2) - 2)^2 + X[3]^2;   /* = r^2 = 0.25: el punto está en el toro */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs__surface_derivs_w(S, u, v, d) := block(
+  [p: S@degree_u, q: S@degree_v, U: S@knots_u, V: S@knots_v,
+   P: S@ctrlpts, W: S@weights, Pw, n, m, du, dv, us, vs, Nu, Nv, temp, SKL, dd, dim],
+  n: length(P) - 1, m: length(first(P)) - 1, dim: length(P[1][1]) + 1,
+  du: min(d, p), dv: min(d, q),
+  us: nurbs_find_span(n, p, u, U), Nu: nurbs_ders_basis_funs(us, u, p, du, U),
+  vs: nurbs_find_span(m, q, v, V), Nv: nurbs_ders_basis_funs(vs, v, q, dv, V),
+  /* only the local (p+1)x(q+1) sub-net, in homogeneous coordinates */
+  Pw: makelist(makelist(nurbs__hom(P[us - p + r + 1][vs - q + s + 1], W[us - p + r + 1][vs - q + s + 1]),
+                        s, 0, q), r, 0, p),
+  SKL: genmatrix(lambda([i, j], nurbs__zerovec(dim)), d + 1, d + 1),
+  for k:0 thru du do (
+    temp: makelist(0, s, 0, q),
+    for s:0 thru q do
+      for r:0 thru p do
+        temp[s + 1]: temp[s + 1] + Nu[k + 1, r + 1] * Pw[r + 1][s + 1],
+    dd: min(d - k, dv),
+    for l:0 thru dd do (
+      SKL[k + 1, l + 1]: nurbs__zerovec(dim),
+      for s:0 thru q do SKL[k + 1, l + 1]: SKL[k + 1, l + 1] + Nv[l + 1, s + 1] * temp[s + 1])),
+  SKL)$
+nurbs_surface_derivs(S, u, v, d) := block([SKLw, A, w, SKL, val, v2, dim],
+  SKLw: nurbs__surface_derivs_w(S, u, v, d),
+  dim: length(SKLw[1, 1]) - 1,
+  A: genmatrix(lambda([i, j], rest(SKLw[i, j], -1)), d + 1, d + 1),
+  w: genmatrix(lambda([i, j], last(SKLw[i, j])), d + 1, d + 1),
+  SKL: genmatrix(lambda([i, j], nurbs__zerovec(dim)), d + 1, d + 1),
+  for k:0 thru d do
+    for l:0 thru d - k do (
+      val: A[k + 1, l + 1],
+      for j:1 thru l do val: val - binomial(l, j) * w[1, j + 1] * SKL[k + 1, l - j + 1],
+      for i:1 thru k do (
+        val: val - binomial(k, i) * w[i + 1, 1] * SKL[k - i + 1, l + 1],
+        v2: 0,
+        for j:1 thru l do v2: v2 + binomial(l, j) * w[i + 1, j + 1] * SKL[k - i + 1, l - j + 1],
+        val: val - binomial(k, i) * v2),
+      SKL[k + 1, l + 1]: val / w[1, 1]),
+  nurbs__finish(SKL, [u, v]))$
+nurbs_surface_tangents(S, u, v) := block([D: nurbs_surface_derivs(S, u, v, 1)],
+  [D[2, 1], D[1, 2]])$
+nurbs_surface_normal(S, u, v) := block([T: nurbs_surface_tangents(S, u, v)],
+  nurbs__unit(nurbs__cross(T[1], T[2])))$
+nurbs_surface_normal(T, 0.1, 0.0);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+4. Etapa 4: geometría diferencial
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+Con las derivadas parciales ya se puede calcular todo lo demás:
+  - Primera forma fundamental: E = Su.Su, F = Su.Sv, G = Sv.Sv
+  - Segunda forma fundamental: L = Suu.n, M = Suv.n, N = Svv.n
+  - Curvatura gaussiana K = (LN - M^2)/(EG - F^2)
+  - Curvatura media     H = (EN - 2FM + GL)/(2(EG - F^2))
+En la matriz D de derivadas, D[k+1, l+1] es la derivada k veces en u y l veces en v.
+Todas estas magnitudes salen de UNA sola llamada a nurbs_surface_derivs(S, u, v, 2), dentro de
+la función auxiliar compartida nurbs_surface_geometry. Las funciones públicas (K, H, curvaturas
+principales, formas fundamentales, exportación VTK, integral de K) solo eligen un elemento de la
+lista que devuelve, así que las derivadas nunca se calculan dos veces.
+Si |Su x Sv| <= nurbs_tol·max(1, |Su||Sv|) el punto es singular: el último elemento vale true y
+las curvaturas valen und (indefinido).
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+nurbs_surface_geometry(S, u, v) := block(
+  [D: nurbs_surface_derivs(S, u, v, 2), Su, Sv, Nv, nn, n, E, F, G, L, M, N, W2, K, H, disc, sing],
+  Su: D[2, 1], Sv: D[1, 2],
+  Nv: nurbs__cross(Su, Sv), nn: nurbs__norm(Nv),
+  sing: if nurbs__has_float([u, v]) then
+          is(nn <= nurbs_tol * max(1, nurbs__norm(Su) * nurbs__norm(Sv)))
+        else nurbs__zero(Nv . Nv),
+  if sing then return([D[1, 1], Su, Sv, und, [Su . Su, Su . Sv, Sv . Sv], und, und, und, und, true]),
+  n: Nv / nn,
+  E: Su . Su, F: Su . Sv, G: Sv . Sv,
+  L: D[3, 1] . n, M: D[2, 2] . n, N: D[1, 3] . n,
+  W2: E * G - F^2,
+  K: (L * N - M^2) / W2,
+  H: (E * N - 2 * F * M + G * L) / (2 * W2),
+  disc: H^2 - K,
+  if nurbs__has_float([u, v]) then disc: max(0, disc),
+  nurbs__finish([D[1, 1], Su, Sv, n, [E, F, G], [L, M, N], K, H,
+                 [H + sqrt(disc), H - sqrt(disc)], false], [u, v]))$
+nurbs_fundamental_forms(S, u, v) := block([g: nurbs_surface_geometry(S, u, v)],
+  if g[10] then und else [g[5], g[6], g[4]])$
+nurbs_gaussian_curvature(S, u, v) := nurbs_surface_geometry(S, u, v)[7]$
+nurbs_mean_curvature(S, u, v) := nurbs_surface_geometry(S, u, v)[8]$
+nurbs_principal_curvatures(S, u, v) := nurbs_surface_geometry(S, u, v)[9]$
+nurbs_gaussian_curvature(T, 0.1, 0.0);   /* exterior del toro: 1/(r(R+r)) = 0.8 */
+nurbs_principal_curvatures(T, 0.1, 0.0); /* -1/(R+r) y -1/r */
+nurbs_surface_geometry(T, 0.1, 0.0);     /* todo junto: [S, Su, Sv, n, [E,F,G], [L,M,N], K, H, [k1,k2], singular] */
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Las integrales globales (área, volumen y curvatura total) se calculan con la cuadratura de
+Gauss-Legendre, que está en nurbs__surface_integral dentro del paquete. Integrar K sobre el toro
+da 0 y sobre la esfera da 4 pi (teorema de Gauss-Bonnet); las pruebas comprueban ambos valores.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: section start ]
+5. Etapa 5: visualización
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+El paquete no dibuja por sí mismo: genera listas de objetos del paquete draw de Maxima
+(points, mesh, vector, y opciones como color = blue) y se las pasa a draw2d o draw3d.
+En wxMaxima usa wxdraw2d y wxdraw3d, que dibujan dentro del cuaderno.
+Muestreamos la curva en puntos y los unimos con points_joined = true.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+load(draw)$
+pts : makelist(float(nurbs_curve_point(C, k/60)), k, 0, 60)$
+wxdraw2d(proportional_axes = xy,
+  color = blue, line_width = 2, points_joined = true, point_type = none, points(pts),
+  color = red, point_type = filled_circle, points(float(C@ctrlpts)));
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Para la superficie se calcula una rejilla de puntos y se dibuja con mesh(fila1, fila2, ...).
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+Tf : new(nurbssrf(2, 2, float(T@knots_u), float(T@knots_v), float(T@ctrlpts), float(T@weights)))$
+rejilla : makelist(makelist(nurbs_surface_point(Tf, i/24.0, j/12.0), j, 0, 12), i, 0, 24)$
+wxdraw3d(proportional_axes = xyz, enhanced3d = true, surface_hide = true, apply(mesh, rejilla));
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+6. Etapa 6: cómo están hechas las pruebas
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+tests/rtest_nurbs.mac usa el formato estándar de pruebas de Maxima (rtest): cada prueba es una
+expresión seguida de su resultado esperado, y batch("rtest_nurbs.mac", test) las ejecuta todas e
+informa de cuántas pasan (95/95). tests/test_nurbs.mac ejecuta esa batería y además compara con
+geomdl con una función como t_close (abajo), que compara números o listas con una tolerancia.
+Cada prueba compara el resultado del paquete con un valor conocido: un ejemplo del libro, una fórmula
+analítica (por ejemplo la curvatura del toro), un invariante (Gauss-Bonnet) o el valor calculado por
+la biblioteca geomdl de Python (archivo tests/reference_geomdl.mac).
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+t_close(nombre, a, b, tol) := block([d: lmax(map(abs, flatten([float(a - b)])))],
+  printf(true, "~a: ~a (error = ~,2e)~%", nombre, if d <= tol then "OK" else "FALLO", d))$
+t_close("curvatura gaussiana del toro", nurbs_gaussian_curvature(T, 0.1, 0.0), 0.8, 1e-12)$
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: section start ]
+7. Cargar el paquete completo
+   [wxMaxima: section end   ] */
+
+/* [wxMaxima: comment start ]
+Todo lo anterior está en un solo archivo, nurbs_maxima.mac, junto con el resto de funciones:
+inserción y refinamiento de nudos (A5.1, A5.4), elevación de grado (A5.9), descomposición en
+Bézier, proyección de puntos por Newton-Raphson, interpolación global resuelta con factorización
+LU (linsolve_by_lu), las mismas operaciones en superficies (dirección u o v), esfera, cilindro,
+mallas y exportación a OBJ/STL/VTK/JSON.
+Para usarlo basta con cargarlo. Cambie la ruta si guardó la carpeta en otro lugar.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+load("C:/Users/DREP/Documents/NURBSMAXIMA/NURBS-Maxima/nurbs_maxima.mac")$
+nurbs_plot(nurbs_torus(2, 1/2), control = true)$
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: comment start ]
+Algunas operaciones nuevas de la versión 2, con la circunferencia C:
+  - refinar (insertar varios nudos a la vez) y elevar el grado no cambian la curva;
+  - la proyección devuelve [u, C(u), distancia];
+  - con un peso simbólico w la curvatura sale como fórmula;
+  - con bigfloat se obtienen 50 cifras.
+   [wxMaxima: comment end   ] */
+
+/* [wxMaxima: input   start ] */
+C : nurbs_circle(1)$
+Cr : nurbs_curve_refine(C, [1/8, 3/8])$
+Cr@knots;
+Ce : nurbs_curve_elevate_degree(C, 1)$
+ratsimp(nurbs_curve_point(Ce, 1/3) - nurbs_curve_point(C, 1/3)), algebraic;   /* [0, 0] */
+nurbs_curve_project(C, [2, 2]);                     /* punto más cercano a (2,2) */
+assume(w > 0)$
+Q : nurbs_bezier_curve([[-1,0], [0,1], [1,0]], [1, w, 1])$
+ratsimp(nurbs_curve_curvature(Q, 1/2));             /* = w */
+fpprec : 50$
+nurbs_curve_point(nurbs_bfloat(C), bfloat(1/7));
+/* [wxMaxima: input   end   ] */
+
+/* Old versions of Maxima abort on loading files that end in a comment. */
+"Created with wxMaxima 22.04.0"$

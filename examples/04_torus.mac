@@ -1,0 +1,72 @@
+/* ==========================================================================
+   Example 04 (intermediate/advanced) -- Case study 1:
+   Gauss-Bonnet on closed NURBS surfaces and the singular poles of the sphere
+   --------------------------------------------------------------------------
+   * exact torus: K and H against the analytic formulas, point types
+   * Gauss-Bonnet  \int\int K dA = 2 pi chi  for the torus (chi = 0), the
+     sphere and a tri-axial ellipsoid (chi = 2, K not constant)
+   * the NURBS sphere has singular points (Su x Sv = 0) at its poles;
+     near them double precision breaks down and bigfloats recover K = 1
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+
+R : 2$  r : 1/2$
+T : nurbs_torus(R, r)$
+nurbs_info(T)$
+Tf : nurbs_float(T)$              /* float copy: fast evaluation */
+
+/* 1. Exactness: (sqrt(x^2+y^2) - R)^2 + z^2 = r^2 */
+pts : apply(append, nurbs_surface_grid(T, 16, 16))$
+print("Max. residual of the implicit equation:",
+      lmax(map(lambda([X], abs((sqrt(X[1]^2+X[2]^2) - R)^2 + X[3]^2 - r^2)), pts)))$
+
+/* 2. Curvatures against the analytic formulas
+      K = cos(phi) / (r (R + r cos(phi))),  cos(phi) = (rho - R)/r         */
+Kex(X) := block([c: (sqrt(X[1]^2+X[2]^2) - R)/r], c / (r*(R + r*c)))$
+for v in [0.0, 0.125, 0.25, 0.375, 0.5] do block([g: nurbs_surface_geometry(Tf, 0.1, v)],
+  printf(true, "v = ~5,3f  K = ~12,8f  (exact ~12,8f)  H = ~12,8f  type: ~a~%",
+         v, g[7], Kex(g[1]), g[8], nurbs_classify_point(Tf, 0.1, v)))$
+print("Principal curvatures on the outer equator:",
+      nurbs_principal_curvatures(Tf, 0.1, 0.0), " (expected -1/(R+r), -1/r)")$
+
+/* 3. Global properties of the torus */
+print("Area      :", nurbs_surface_area(T),   " exact 4 pi^2 R r   =", float(4*%pi^2*R*r))$
+print("Volume    :", nurbs_surface_volume(T), " exact 2 pi^2 R r^2 =", float(2*%pi^2*R*r^2))$
+print("int K dA  :", nurbs_total_gaussian_curvature(T), " (Gauss-Bonnet: 2 pi chi = 0)")$
+
+/* 4. Gauss-Bonnet on genus-0 surfaces: sphere and ellipsoid (3,2,1) */
+Sph : nurbs_sphere(1)$
+Ell : nurbs_scale(Sph, [3, 2, 1])$      /* exact: NURBS are affinely invariant */
+print("Sphere    int K dA =", nurbs_total_gaussian_curvature(Sph), "  4 pi =", float(4*%pi))$
+for n in [2, 4] do
+  print("Ellipsoid int K dA, ", n, "x", n, "Gauss cells per patch:",
+        nurbs_total_gaussian_curvature(Ell, n), " error:", nurbs_total_gaussian_curvature(Ell, n) - float(4*%pi))$
+print("Ellipsoid K at the poles' neighbourhood vs equator:",
+      nurbs_gaussian_curvature(nurbs_float(Ell), 0.0, 0.01), nurbs_gaussian_curvature(nurbs_float(Ell), 0.0, 0.5))$
+
+/* 5. Singular points of the NURBS sphere */
+sing : nurbs_singular_points(Sph, 8, 8)$
+print("Singular grid nodes:", length(sing), "; z values:", unique(map(lambda([s], s[3][3]), sing)))$
+print("Torus singular points:", nurbs_singular_points(T, 8, 8))$
+print("Point type at a pole:", nurbs_classify_point(nurbs_float(Sph), 0.3, 0.0))$
+
+/* 6. Approaching the pole: double precision vs bigfloats.
+      EG - F^2 -> 0 at the pole, so K = (LN - M^2)/(EG - F^2) suffers
+      catastrophic cancellation; arbitrary precision removes it.          */
+Sf : nurbs_float(Sph)$
+fpprec : 50$  Sb : nurbs_bfloat(Sph)$
+printf(true, "~%  distance to pole   K - 1 (double)        K - 1 (bfloat, 50 digits)~%")$
+block([nurbs_tol: 1e-40],
+  for e in [1e-4, 1e-6, 1e-8, 1e-9, 1e-12] do
+    printf(true, "  ~10,1e    ~22,6e    ~22,6e~%", e,
+           nurbs_gaussian_curvature(Sf, 0.3, e) - 1,
+           float(nurbs_gaussian_curvature(Sb, bfloat(0.3), bfloat(e)) - 1)))$
+
+/* 7. Plots and export (VTK with K and H for ParaView) */
+if nurbs_show_plots then nurbs_plot(T, nu = 36, nv = 18)$
+nurbs_export_plot(T, sconcat(dir, "04_torus.png"), nu = 36, nv = 18, control = true)$
+nurbs_export_vtk(T, sconcat(dir, "04_torus.vtk"), 36, 18)$
+nurbs_export_vtk(Ell, sconcat(dir, "04_ellipsoid.vtk"), 36, 18)$
+nurbs_export_json(T, sconcat(dir, "04_torus.json"))$
+print("Files: 04_torus.png, 04_torus.vtk, 04_ellipsoid.vtk, 04_torus.json")$

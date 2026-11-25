@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "NURBS-Maxima: exact, symbolic and arbitrary-precision NURBS curves, surfaces and differential geometry for Maxima"
+version: 2.0.0
+license: MIT
+repository-code: "https://github.com/ronaldpaul78/NURBS-Maxima"
+# doi: 10.5281/zenodo.0000000                                  # TODO: add after the Zenodo release
+authors:
+  - family-names: "Santamaria Silupu"
+    given-names: "Ronald Paul"
+    orcid: "https://orcid.org/0009-0007-2226-4815"
+    affiliation: "Universidad Nacional de Piura"
+  - family-names: "Castillo Maza"
+    given-names: "Yheff Alexander"
+    orcid: "https://orcid.org/0009-0005-8158-8460"
+    affiliation: "Universidad Nacional de Piura"
+  - family-names: "Jimenez Vilcherrez"
+    given-names: "Judith Keren"
+    orcid: "https://orcid.org/0000-0002-7823-1533"
+    affiliation: "Universidad Nacional de Piura"
+  - family-names: "Urbina Guzman"
+    given-names: "Ruben Teodoro"
+    orcid: "https://orcid.org/0000-0002-8544-3307"
+    affiliation: "Universidad Nacional de Piura"
+  - family-names: "Sosa Gonzales"
+    given-names: "Victor Bernardo"
+    orcid: "https://orcid.org/0000-0002-0519-257X"
+    affiliation: "Universidad Nacional de Piura"
+keywords: [NURBS, B-splines, Maxima, computer algebra, differential geometry]

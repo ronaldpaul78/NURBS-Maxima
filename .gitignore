@@ -1,0 +1,23 @@
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.spl
+*.synctex.gz
+*.toc
+# Overleaf package (generated from docs/softwarex/)
+docs/softwarex_overleaf.zip
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Maxima / editors / OS
+*.wxmx~
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

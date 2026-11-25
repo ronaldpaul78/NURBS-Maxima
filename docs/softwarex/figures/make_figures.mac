@@ -1,0 +1,69 @@
+/* ==========================================================================
+   NURBS-Maxima -- figures and figure data for the SoftwareX manuscript
+       cd docs/softwarex/figures ;  maxima -b make_figures.mac
+   Produces (in this folder):
+     torus.pdf, vase.pdf          surfaces drawn with nurbs_draw_surface + draw
+     pole_sweep.csv               |K-1| near the pole of the unit sphere,
+                                  double vs 50-digit bigfloat   (Fig. 3a)
+     vase_meridian.csv            profile radius and K, H along a meridian
+                                  of the vase of Example 07     (Fig. 3b)
+     weight_study.csv             apex curvature / arc length of the conic
+                                  arc and centre K / area of the weighted
+                                  patch of Example 06 versus w  (Fig. 4)
+   Every number plotted in the manuscript comes from these files.
+   ========================================================================== */
+figdir : pathname_directory(load_pathname)$
+load(sconcat(figdir, "../../../nurbs_maxima.mac"))$
+nurbs_show_plots : false$
+
+/* ---- surfaces ------------------------------------------------------------ */
+T : nurbs_torus(2, 1/2)$
+/* figure style: no axes or colour box; draw objects from nurbs_draw_surface */
+fig3d(objs, name, vw) := draw(apply(gr3d, append([proportional_axes = xyz, axis_3d = false,
+        xtics = none, ytics = none, ztics = none, colorbox = false, view = vw, user_preamble = "unset border"], objs)),
+      terminal = pdfcairo, file_name = sconcat(figdir, name), dimensions = [1000, 800])$
+fig3d(nurbs_draw_surface(T, nu = 36, nv = 18, control = true), "torus", [60, 30])$
+
+data : [[0.6, 0], [1.0, 0.4], [1.2, 1.0], [0.9, 1.8], [0.55, 2.4], [0.5, 2.8], [0.75, 3.3], [0.9, 3.5]]$
+prof2d : nurbs_interpolate_curve(data, 3, 'centripetal)$
+prof : nurbs_curve(3, prof2d@knots, map(lambda([X], [X[1], 0, X[2]]), prof2d@ctrlpts))$
+V : nurbs_revolve(prof)$
+Vf : nurbs_float(V)$
+fig3d(nurbs_draw_surface(V, nu = 48, nv = 40), "vase", [70, 30])$
+
+/* ---- pole sweep: unit sphere, u = 0.3, v = eps ---------------------------- */
+Sph : nurbs_sphere(1)$
+Sf : nurbs_float(Sph)$
+fpprec : 50$  Sb : nurbs_bfloat(Sph)$
+block([nurbs_tol: 1e-40, s: openw(sconcat(figdir, "pole_sweep.csv"))],
+  printf(s, "k,eps,errdouble,errbfloat~%"),
+  for k : 1 thru 14 do block([e: 10.0^(-k), ed, eb],
+    ed : abs(nurbs_gaussian_curvature(Sf, 0.3, e) - 1),
+    eb : abs(float(nurbs_gaussian_curvature(Sb, bfloat(0.3), bfloat(10)^(-k)) - 1)),
+    printf(s, "~d,~e,~e,~e~%", k, e, ed, eb)),
+  close(s))$
+
+/* ---- vase meridian: profile radius, K and H along u = 0 ------------------- */
+block([s: openw(sconcat(figdir, "vase_meridian.csv")), n: 80],
+  printf(s, "v,x,z,K,H~%"),
+  for j : 0 thru n do block([g: nurbs_surface_geometry(Vf, 0.0, j/n)],
+    printf(s, "~f,~f,~f,~f,~f~%", float(j/n), g[1][1], g[1][3], g[7], g[8])),
+  close(s))$
+
+/* ---- weight study (closed forms from nurbs_curve_curvature / curvature_sym) */
+assume(w > 0)$
+Q : nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, w, 1])$
+kmid : ratsimp(nurbs_curve_curvature(Q, 1/2))$
+P : [[[0,0,0], [0,1,0], [0,2,0]], [[1,0,0], [1,1,1], [1,2,0]], [[2,0,0], [2,1,0], [2,2,0]]]$
+S : nurbs_bezier_surface(P, [[1,1,1], [1,w,1], [1,1,1]])$
+K0 : factor(ratsimp(subst([s = 1/2, t = 1/2], nurbs_curvature_sym(S, 2, 2, s, t)[1])))$
+print("apex curvature:", kmid, "   centre K:", K0)$
+block([f: openw(sconcat(figdir, "weight_study.csv"))],
+  printf(f, "w,kapex,length,Kcentre,area~%"),
+  for wv in [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8] do
+    printf(f, "~f,~f,~f,~f,~f~%", wv, float(subst(w = wv, kmid)),
+      nurbs_curve_length(nurbs_bezier_curve([[-1, 0], [0, 1], [1, 0]], [1, float(wv), 1])),
+      float(subst(w = wv, K0)),
+      nurbs_surface_area(nurbs_bezier_surface(P, [[1,1,1], [1,float(wv),1], [1,1,1]]))),
+  close(f))$
+print("make_figures.mac: done")$

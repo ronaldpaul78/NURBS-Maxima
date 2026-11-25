@@ -1,0 +1,60 @@
+/* ==========================================================================
+   Example 05 (intermediate) -- Classical modelling operations
+   Knot insertion (A5.1/A5.3), knot refinement (A5.4/A5.5), degree
+   elevation (A5.9), Bezier decomposition (A5.6/A5.7) and point inversion.
+   Every operation leaves the geometry unchanged; this is checked exactly.
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+
+U : [0, 0, 0, 0, 1/3, 2/3, 1, 1, 1, 1]$
+P : [[0,0,0], [1,2,1], [2,-1,2], [4,1,0], [5,3,1], [7,0,2]]$
+C : nurbs_curve(3, U, P, [1, 2, 1/2, 1, 3, 1])$
+nurbs_info(C)$
+
+/* 1. Knot insertion: u = 1/2 twice */
+Ci : nurbs_curve_insert_knot(C, 1/2, 2)$
+print("Knots after inserting 1/2 twice:", Ci@knots)$
+print("C(3/5) before/after:", nurbs_curve_point(C, 3/5) - nurbs_curve_point(Ci, 3/5))$
+
+/* 2. Knot refinement: several knots in one pass */
+Cr : nurbs_curve_refine(C, [1/6, 1/2, 1/2, 5/6])$
+print("Refined knot vector:", Cr@knots)$
+print("Max. deviation (100 samples):",
+      lmax(map(lambda([u], lmax(abs(float(nurbs_curve_point(Cr, u) - nurbs_curve_point(C, u))))), makelist(k/99, k, 0, 99))))$
+
+/* 3. Degree elevation 3 -> 5: interior knot multiplicities grow by 2,
+      so the C^2 continuity is preserved                                   */
+Ce : nurbs_curve_elevate_degree(C, 2)$
+print("Elevated knots:", Ce@knots)$
+print("Continuity before:", knots_continuity(C@knots, 3), " after:", knots_continuity(Ce@knots, 5))$
+print("Exactly the same curve on [1/3, 2/3):",
+      is(ratsimp(nurbs_curve_span_expr(Ce, 8, t) - nurbs_curve_span_expr(C, 4, t)) = [0, 0, 0]))$
+
+/* 4. Bezier decomposition (Bezier extraction, as used in isogeometric
+      analysis): each segment keeps its parameter interval               */
+B : nurbs_curve_decompose(C)$
+for b in B do print("segment", nurbs_curve_domain(b), "control points:", length(b@ctrlpts))$
+
+/* 5. Point inversion: closest point of the curve to an external point */
+Q : [3, 1, 2]$
+pr : nurbs_curve_project(C, Q)$
+print("Closest parameter u* =", pr[1], " point =", pr[2], " distance =", pr[3])$
+D1 : nurbs_curve_derivs(nurbs_float(C), pr[1], 1)[2]$
+print("Orthogonality C'(u*) . (C(u*) - Q) =", D1 . (pr[2] - Q))$
+
+/* 6. The same operations on a surface (applied along u or v) */
+T : nurbs_torus(2, 1/2)$
+T2 : nurbs_surface_elevate_degree(nurbs_surface_insert_knot(T, 'u, 1/3, 1), 'v, 1)$
+nurbs_info(T2)$
+print("Same torus:", ratsimp(nurbs_surface_point(T2, 1/5, 2/7) - nurbs_surface_point(T, 1/5, 2/7), algebraic))$
+BT : nurbs_surface_decompose(T)$
+print("Torus Bezier patches:", length(BT), "x", length(first(BT)))$
+prs : nurbs_surface_project(T, [3, 0.2, 0.9])$
+print("Closest point on the torus to (3,0.2,0.9): distance =", prs[4],
+      " analytic =", float(sqrt((sqrt(9 + 0.04) - 2)^2 + 0.81) - 1/2))$
+
+/* 7. Plot: original control polygon vs refined one */
+if nurbs_show_plots then nurbs_plot([C, Cr])$
+nurbs_export_plot([C, Cr], sconcat(dir, "05_refinement.png"))$
+print("File: 05_refinement.png")$

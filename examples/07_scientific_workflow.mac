@@ -1,0 +1,62 @@
+/* ==========================================================================
+   Example 07 (advanced) -- Case study 3:
+   complete design and scientific-visualisation workflow
+   --------------------------------------------------------------------------
+   measured profile points -> global interpolation (LU) -> surface of
+   revolution -> refinement -> curvature fields K and H -> statistics ->
+   export to VTK (ParaView), STL (3-D printing), OBJ, PNG.
+   ========================================================================== */
+load(sconcat(pathname_directory(load_pathname), "../nurbs_maxima.mac"))$
+dir : pathname_directory(load_pathname)$
+
+/* 1. Profile of a vase, given as data points (radius x, height z) */
+data : [[0.6, 0], [1.0, 0.4], [1.2, 1.0], [0.9, 1.8], [0.55, 2.4], [0.5, 2.8], [0.75, 3.3], [0.9, 3.5]]$
+prof2d : nurbs_interpolate_curve(data, 3, 'centripetal)$
+prof : nurbs_curve(3, prof2d@knots, map(lambda([X], [X[1], 0, X[2]]), prof2d@ctrlpts))$
+nurbs_info(prof)$
+print("Interpolation residual:",
+      lmax(map(lambda([X], lmax(map(abs, X))), map(lambda([u, D], nurbs_curve_point(prof2d, u) - D),
+           params_centripetal(data), data))))$
+
+/* 2. Surface of revolution (exact circular sections) */
+V : nurbs_revolve(prof)$
+nurbs_info(V)$
+
+/* 3. Curvature fields on a 48 x 40 grid */
+Vf : nurbs_float(V)$ n_u : 48$ n_v : 40$  /* (do not call them nu, nv: those are plot option names) */
+G : makelist(makelist(nurbs_surface_geometry(Vf, i/n_u, j/n_v), j, 0, n_v), i, 0, n_u)$
+flat : apply(append, G)$
+Ks : map(lambda([g], g[7]), flat)$  Hs : map(lambda([g], g[8]), flat)$
+printf(true, "K in [~,4f, ~,4f],  H in [~,4f, ~,4f]~%", lmin(Ks), lmax(Ks), lmin(Hs), lmax(Hs))$
+types : map(lambda([g], if g[7] > 1e-6 then 'elliptic elseif g[7] < -1e-6 then 'hyperbolic else 'parabolic), flat)$
+for ty in ['elliptic, 'hyperbolic, 'parabolic] do
+  printf(true, "  ~a points: ~,1f %~%", ty, 100.0 * length(sublist(types, lambda([x], x = ty))) / length(types))$
+/* parabolic circles (K = 0) occur at the inflection heights of the profile */
+infl : sublist(makelist(j/n_v, j, 0, n_v - 1),
+               lambda([v], is(G[1][round(v*n_v) + 1][7] * G[1][round(v*n_v) + 2][7] < 0)))$
+print("K changes sign between v =", infl, "(inflections of the profile)")$
+
+/* 4. Global quantities */
+print("Lateral area           :", nurbs_surface_area(V))$
+print("Total curvature int K dA:", nurbs_total_gaussian_curvature(V))$
+/* Gauss-Bonnet with boundary for this annulus (chi = 0): the boundary
+   circles contribute the geodesic-curvature term, which for a surface of
+   revolution gives  int K dA = 2 pi (r'(s_bottom) - r'(s_top)),  where
+   r'(s) = dx/ds is the radial slope of the profile per unit arc length.   */
+block([rs: lambda([u], block([d: nurbs_curve_derivs(prof2d, u, 1)[2]], d[1] / sqrt(d . d)))],
+  print("Gauss-Bonnet boundary term 2 pi (r'(0) - r'(1)):",
+        2 * float(%pi) * (rs(0.0) - rs(1.0))))$
+
+/* 5. Refine for analysis (e.g. isogeometric) and check invariance */
+Vr : nurbs_surface_refine(V, 'v, [0.25, 0.5, 0.75])$
+nurbs_info(Vr)$
+print("Refinement invariance:", lmax(map(abs, nurbs_surface_point(nurbs_float(Vr), 0.3, 0.6) - nurbs_surface_point(Vf, 0.3, 0.6))))$
+
+/* 6. Export for scientific visualisation and digital fabrication */
+nurbs_export_vtk(V, sconcat(dir, "07_vase.vtk"), 48, 40)$       /* K, H, normals for ParaView */
+nurbs_export_stl(V, sconcat(dir, "07_vase.stl"), 48, 40)$       /* 3-D printing */
+nurbs_export_obj(V, sconcat(dir, "07_vase.obj"), 48, 40)$
+nurbs_export_json(V, sconcat(dir, "07_vase.json"))$             /* exact definition for geomdl */
+if nurbs_show_plots then nurbs_plot(V, nu = 48, nv = 40)$
+nurbs_export_plot(V, sconcat(dir, "07_vase.png"), nu = 48, nv = 40)$
+print("Files: 07_vase.vtk, 07_vase.stl, 07_vase.obj, 07_vase.json, 07_vase.png")$
