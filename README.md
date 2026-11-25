@@ -1,5 +1,7 @@
 # NURBS-Maxima
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24523237.svg)](https://doi.org/10.5281/zenodo.24523237)
+
 **NURBS curves and surfaces for the computer algebra system [Maxima](https://maxima.sourceforge.io/)
 and its interface [wxMaxima](https://wxmaxima-developers.github.io/wxmaxima/).**
 
@@ -146,3 +148,12 @@ MIT. See [LICENSE](LICENSE).
 * L. Piegl, W. Tiller. *The NURBS Book*, 2nd ed. Springer, 1997.
 * O. R. Bingol, A. Krishnamurthy. NURBS-Python: An open-source object-oriented NURBS modeling
   framework in Python. *SoftwareX* 9 (2019) 85–94.
+
+## How to cite
+
+Santamaria Silupu, R. P., Castillo Maza, Y. A., Jimenez Vilcherrez, J. K., Urbina Guzman, R. T.,
+Sosa Gonzales, V. B. *NURBS-Maxima: exact, symbolic and arbitrary-precision NURBS curves, surfaces
+and differential geometry for Maxima* (v2.0.0). Zenodo, 2026.
+https://doi.org/10.5281/zenodo.24523238
+
+The DOI 10.5281/zenodo.24523237 always points to the latest version. See also `CITATION.cff`.
